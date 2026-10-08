@@ -1,4 +1,7 @@
 import type { HttpMethod, ResponseType } from './adapters/types.js';
+import type { CacheOptions } from './middleware/cache.js';
+import type { RetryOptions } from './middleware/retry.js';
+import type { Middleware } from './middleware/types.js';
 import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 
 /** A schema slot: either a Standard Schema or nothing. */
@@ -118,6 +121,16 @@ export interface RouteDefinition<
   headers?: Record<string, string>;
   /** Adapter specific options (axios config, ofetch options, RequestInit...). */
   options?: Record<string, unknown>;
+  /** Per-attempt timeout in ms. `false` disables a repository-level timeout. */
+  timeout?: number | false;
+  /** Retry policy, a number of attempts, or `false` to disable the repository-level policy. */
+  retry?: RetryOptions | number | false;
+  /** Cache policy, a TTL in ms, or `false` to disable the repository-level policy. */
+  cache?: CacheOptions | number | false;
+  /** Cache tags to invalidate after this route succeeds (typically on mutations). */
+  invalidates?: readonly string[];
+  /** Extra middlewares for this route, run inside the repository ones. */
+  middlewares?: readonly Middleware[];
 }
 
 /** Any route, regardless of its generics. */
@@ -142,7 +155,7 @@ export type RouteMap = Record<string, AnyRoute>;
  * ```
  */
 export function createRoute<
-  TPath extends string,
+  const TPath extends string,
   TParams extends ParamsSpec<TPath> = undefined,
   TQuery extends SchemaOrUndefined = undefined,
   TBody extends SchemaOrUndefined = undefined,
@@ -163,10 +176,18 @@ export function createRoute<
 /** Flattens intersections so hover tooltips are readable. */
 export type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
+/**
+ * The schema in a slot, or `undefined` when the slot is empty. A slot typed as the
+ * unconstrained `AnySchema` (which happens when TypeScript infers a route from the
+ * contextual `AnyRoute` type, e.g. `createRoute(...)` written inline inside
+ * `mergeAll({ ... })`) is treated as empty too.
+ */
 type SchemaOf<S> = [NonNullable<S>] extends [never]
   ? undefined
   : NonNullable<S> extends AnySchema
-    ? NonNullable<S>
+    ? AnySchema extends NonNullable<S>
+      ? undefined
+      : NonNullable<S>
     : undefined;
 
 type InputOf<S, Fallback = never> =
@@ -224,6 +245,12 @@ export interface CallOptions {
   signal?: AbortSignal;
   /** Adapter specific options merged over repository and route options. */
   options?: Record<string, unknown>;
+  /** Per-attempt timeout in ms for this call, `false` to disable. */
+  timeout?: number | false;
+  /** Retry policy for this call, `false` to disable. */
+  retry?: RetryOptions | number | false;
+  /** Cache policy for this call, `false` to bypass the cache. */
+  cache?: CacheOptions | number | false;
 }
 
 /** The single argument a route caller accepts. */

@@ -2,11 +2,11 @@
   {
     "name": "ESM",
     "path": "dist/index.js",
-    "limit": "4 kB"
+    "limit": "8 kB"
   },
   {
     "name": "CJS",
     "path": "dist/index.cjs",
-    "limit": "4 kB"
+    "limit": "8 kB"
   }
 ]

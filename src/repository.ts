@@ -2,10 +2,18 @@ import { fetchAdapter } from './adapters/fetch.js';
 import type { Adapter, AdapterRequest, AdapterResponse } from './adapters/types.js';
 import { ApiError, ValidationError } from './errors.js';
 import type { ValidationTarget } from './errors.js';
+import { cacheMiddleware, createCacheController } from './middleware/cache.js';
+import type { CacheController, CacheOptions, CacheStorage } from './middleware/cache.js';
+import { retryMiddleware } from './middleware/retry.js';
+import type { RetryOptions } from './middleware/retry.js';
+import { timeoutMiddleware } from './middleware/timeout.js';
+import { composeMiddlewares } from './middleware/types.js';
+import type { Middleware, MiddlewareContext } from './middleware/types.js';
+import { resolvePolicy, resolveTimeout } from './policy.js';
 import type {
   AnyRoute,
-  RouteArgs,
   ParamsSpec,
+  RouteArgs,
   RouteCaller,
   RouteMap,
   RouteOutput,
@@ -21,20 +29,31 @@ export type HeadersProvider =
 
 /** Lifecycle hooks invoked around every request. */
 export interface RepositoryHooks {
-  /** Called right before the adapter is invoked. Mutating `request` is allowed. */
-  onRequest?: (context: { route: string; request: AdapterRequest }) => void | Promise<void>;
-  /** Called after the adapter answers, before status and schema checks. */
+  /** Called right before the adapter is invoked, once per attempt. Mutating `request` is allowed. */
+  onRequest?: (context: {
+    route: string;
+    request: AdapterRequest;
+    attempt: number;
+  }) => void | Promise<void>;
+  /** Called after the adapter answers, once per attempt, before status and schema checks. */
   onResponse?: (context: {
     route: string;
     request: AdapterRequest;
     response: AdapterResponse;
+    attempt: number;
   }) => void | Promise<void>;
-  /** Called when the call fails for any reason (network, status, validation). */
+  /** Called once when the call finally fails for any reason (network, status, validation). */
   onError?: (context: {
     route: string;
     request: AdapterRequest | undefined;
     error: unknown;
   }) => void | Promise<void>;
+}
+
+/** Repository-level cache options: the policy defaults plus the backing store. */
+export interface RepositoryCacheOptions extends CacheOptions {
+  /** Where entries live. Defaults to an in-memory `Map`. */
+  storage?: CacheStorage;
 }
 
 /** Configuration shared by all routes of a repository. */
@@ -52,6 +71,14 @@ export interface RepositoryConfig {
   /** Decide whether a status code is a success. Defaults to `200 <= status < 300`. */
   isSuccess?: (status: number) => boolean;
   hooks?: RepositoryHooks;
+  /** Middlewares run around every request, outermost first. */
+  middlewares?: readonly Middleware[];
+  /** Default per-attempt timeout in ms. Routes and calls can override or disable it. */
+  timeout?: number | false;
+  /** Default retry policy or number of attempts. Routes and calls can override or disable it. */
+  retry?: RetryOptions | number | false;
+  /** Default cache policy or TTL in ms, plus the storage. Routes and calls can override or disable it. */
+  cache?: RepositoryCacheOptions | number;
 }
 
 /** The object returned by `build()`: one caller per route plus a few `$`-prefixed extras. */
@@ -62,6 +89,8 @@ export type RepositoryClient<TRoutes extends RouteMap> = {
   readonly $config: Readonly<RepositoryConfig>;
   /** Route definitions keyed by name. */
   readonly $routes: Readonly<TRoutes>;
+  /** Cache of this client: invalidate by tag, delete by key or clear. */
+  readonly $cache: CacheController;
 };
 
 /** Fluent builder returned by {@link createRepository}. */
@@ -100,14 +129,22 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
       adapter: this.#config.adapter ?? fetchAdapter(),
     };
     const routes = { ...this.#routes };
+    const cacheStorage = typeof config.cache === 'object' ? config.cache.storage : undefined;
+    const runtime: Runtime = {
+      config,
+      adapter: config.adapter ?? fetchAdapter(),
+      cache: createCacheController(cacheStorage),
+      isSuccess: config.isSuccess ?? defaultIsSuccess,
+    };
 
     const client: Record<string, unknown> = {
       $config: Object.freeze(config),
       $routes: Object.freeze(routes),
+      $cache: runtime.cache,
     };
 
     for (const [name, route] of Object.entries(routes)) {
-      client[name] = createCaller(name, route, config);
+      client[name] = createCaller(name, route, runtime);
     }
 
     return client as RepositoryClient<TRoutes>;
@@ -119,7 +156,7 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
  *
  * @example
  * ```ts
- * const github = createRepository({ baseUrl: 'https://api.github.com' })
+ * const github = createRepository({ baseUrl: 'https://api.github.com', timeout: 10_000, retry: 3 })
  *   .mergeAll({ getUser, listRepos })
  *   .build();
  *
@@ -134,13 +171,20 @@ export function createRepository(config: RepositoryConfig): RepositoryBuilder {
 // Execution
 // ---------------------------------------------------------------------------
 
+interface Runtime {
+  config: RepositoryConfig;
+  adapter: Adapter;
+  cache: CacheController;
+  isSuccess: (status: number) => boolean;
+}
+
 function createCaller<R extends AnyRoute>(
   name: string,
   route: R,
-  config: RepositoryConfig,
+  runtime: Runtime,
 ): RouteCaller<R> {
   const raw = (...args: RouteArgs<R>): Promise<RouteResponse<RouteOutput<R>>> =>
-    execute(name, route, config, (args[0] ?? {}) as unknown as LooseInput) as Promise<
+    execute(name, route, runtime, (args[0] ?? {}) as unknown as LooseInput) as Promise<
       RouteResponse<RouteOutput<R>>
     >;
 
@@ -157,14 +201,18 @@ interface LooseInput {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   options?: Record<string, unknown>;
+  timeout?: number | false;
+  retry?: RetryOptions | number | false;
+  cache?: CacheOptions | number | false;
 }
 
 async function execute(
   name: string,
   route: AnyRoute,
-  config: RepositoryConfig,
+  runtime: Runtime,
   input: LooseInput,
 ): Promise<RouteResponse<unknown>> {
+  const { config } = runtime;
   const hooks = config.hooks ?? {};
   let request: AdapterRequest | undefined;
 
@@ -186,15 +234,9 @@ async function execute(
     };
     if (body !== undefined) request.body = body;
 
-    await hooks.onRequest?.({ route: name, request });
+    const response = await buildPipeline(name, route, runtime, input)(request);
 
-    const adapter = config.adapter ?? fetchAdapter();
-    const response = await adapter.request(request);
-
-    await hooks.onResponse?.({ route: name, request, response });
-
-    const isSuccess = config.isSuccess ?? defaultIsSuccess;
-    if (!isSuccess(response.status)) {
+    if (!runtime.isSuccess(response.status)) {
       throw new ApiError(
         response.status,
         response.data,
@@ -209,6 +251,8 @@ async function execute(
         ? response.data
         : await validate(name, 'response', route.response, response.data);
 
+    if (route.invalidates?.length) await runtime.cache.invalidate(...route.invalidates);
+
     return {
       data,
       status: response.status,
@@ -219,6 +263,43 @@ async function execute(
     await hooks.onError?.({ route: name, request, error });
     throw error;
   }
+}
+
+/**
+ * Chain for one call, outermost first:
+ * repository middlewares → route middlewares → cache → retry → timeout → hooks → adapter.
+ */
+function buildPipeline(
+  name: string,
+  route: AnyRoute,
+  runtime: Runtime,
+  input: LooseInput,
+): (request: AdapterRequest) => Promise<AdapterResponse> {
+  const { config } = runtime;
+  const chain: Middleware[] = [...(config.middlewares ?? []), ...(route.middlewares ?? [])];
+
+  const cache = resolvePolicy<CacheOptions>('ttl', config.cache, route.cache, input.cache);
+  if (cache) chain.push(cacheMiddleware(runtime.cache, cache, runtime.isSuccess));
+
+  const retry = resolvePolicy<RetryOptions>('attempts', config.retry, route.retry, input.retry);
+  if (retry) chain.push(retryMiddleware(retry));
+
+  const timeout = resolveTimeout(config.timeout, route.timeout, input.timeout);
+  if (timeout) chain.push(timeoutMiddleware(timeout));
+
+  chain.push(hooksMiddleware(config.hooks ?? {}));
+
+  const context: MiddlewareContext = { route: name, attempt: 1 };
+  return composeMiddlewares(chain, (request) => runtime.adapter.request(request), context);
+}
+
+function hooksMiddleware(hooks: RepositoryHooks): Middleware {
+  return async (request, next, context) => {
+    await hooks.onRequest?.({ route: context.route, request, attempt: context.attempt });
+    const response = await next(request);
+    await hooks.onResponse?.({ route: context.route, request, response, attempt: context.attempt });
+    return response;
+  };
 }
 
 function defaultIsSuccess(status: number): boolean {

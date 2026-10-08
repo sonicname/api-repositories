@@ -48,3 +48,17 @@ function formatIssues(issues: readonly StandardSchemaV1.Issue[]): string {
     })
     .join('; ');
 }
+
+/** Thrown when an attempt exceeds the configured timeout. */
+export class TimeoutError extends Error {
+  override readonly name = 'TimeoutError';
+
+  constructor(
+    /** Name of the route that was being called. */
+    readonly route: string,
+    /** The timeout that was exceeded, in ms. */
+    readonly timeout: number,
+  ) {
+    super(`Request to route "${route}" timed out after ${String(timeout)}ms`);
+  }
+}

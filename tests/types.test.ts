@@ -81,4 +81,17 @@ describe('type inference', () => {
     expectTypeOf(typeOnly).toBeFunction();
     expectTypeOf(api).not.toHaveProperty('nope');
   });
+
+  it('keeps inputs optional for routes created inline inside mergeAll/addRoute', () => {
+    const api = createRepository({ baseUrl: 'https://x' })
+      .mergeAll({ ping: createRoute({ method: 'GET', path: '/ping', responseType: 'text' }) })
+      .addRoute('user', createRoute({ method: 'GET', path: '/users/:id' }))
+      .build();
+
+    expectTypeOf(api.ping).parameters.toExtend<[input?: unknown]>();
+    expectTypeOf(api.ping).returns.resolves.toEqualTypeOf<string>();
+    expectTypeOf(api.user).parameter(0).toHaveProperty('params');
+    expectTypeOf(api.user).parameter(0).not.toHaveProperty('query');
+    expectTypeOf(api.user).parameter(0).not.toHaveProperty('body');
+  });
 });

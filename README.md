@@ -14,7 +14,11 @@ Declare your backend endpoints once, get a fully typed API client.
   own in a few lines.
 - **Validated at runtime**: bad inputs are rejected before the request is sent, unexpected
   responses throw a `ValidationError`, non-2xx statuses throw an `ApiError`.
-- **Tiny**: no runtime dependencies, under 4 kB minified.
+- **Resilient**: per-attempt timeout, retry with exponential backoff and `Retry-After`, and an
+  opt-in cache with TTL, request deduplication and tag invalidation. All configurable per
+  repository, per route and per call.
+- **Extensible**: a middleware pipeline around the transport for logging, auth refresh, mocking...
+- **Tiny**: no runtime dependencies, under 8 kB minified.
 
 ## Install
 
@@ -156,14 +160,112 @@ createRepository({
   validateResponse: true, // set false to skip response schema validation
   isSuccess: (status) => status < 400, // default: 200 <= status < 300
   hooks: {
-    onRequest: ({ route, request }) => {},
-    onResponse: ({ route, request, response }) => {},
+    onRequest: ({ route, request, attempt }) => {},
+    onResponse: ({ route, request, response, attempt }) => {},
     onError: ({ route, request, error }) => {},
   },
+  middlewares: [], // see below
+  timeout: 10_000, // per attempt, in ms
+  retry: { attempts: 3 }, // or just a number
+  cache: { ttl: 30_000 }, // or just a number; GET/HEAD only
 });
 ```
 
 Routes can be registered with `.mergeAll({ ... })` or one at a time with `.addRoute('name', route)`.
+
+## Timeout, retry and cache
+
+The three policies follow the same layering: repository defaults, overridden by the route,
+overridden by the call. A number is a shorthand (`timeout` ms, retry `attempts`, cache `ttl`),
+an object is shallow-merged over the level below, and `false` disables the policy.
+
+```ts
+const listRepos = createRoute({
+  method: 'GET',
+  path: '/users/:username/repos',
+  retry: { attempts: 5 }, // merged over the repository retry options
+  cache: { ttl: 60_000, tags: ['repos'] },
+});
+
+const createRepo = createRoute({
+  method: 'POST',
+  path: '/user/repos',
+  retry: false, // never retry this one
+  invalidates: ['repos'], // drop cached entries tagged "repos" after success
+});
+
+await github.listRepos({ params: { username: 'octocat' }, timeout: 2_000, cache: false });
+```
+
+### Timeout
+
+Applies to each attempt. When it fires the call rejects with a `TimeoutError`. A caller
+`signal` still works: whichever aborts first wins.
+
+### Retry
+
+Defaults: 3 attempts, idempotent methods only (`GET, HEAD, PUT, DELETE, OPTIONS`), on statuses
+`408, 425, 429, 500, 502, 503, 504` or on thrown errors (network, timeout), exponential backoff
+with jitter starting at 300 ms, and `Retry-After` honoured when present. Requests whose body is a
+stream are never retried, and a caller abort stops everything.
+
+```ts
+retry: {
+  attempts: 4,
+  delay: ({ attempt }) => attempt * 500, // or a fixed number of ms
+  methods: ['GET', 'POST'],
+  statuses: [500, 503],
+  respectRetryAfter: true,
+  // Replace the decision entirely; call defaultShouldRetry to extend it instead.
+  shouldRetry: (ctx) => defaultShouldRetry(ctx) || ctx.response?.status === 418,
+}
+```
+
+### Cache
+
+Opt-in through `ttl`. Only successful `GET`/`HEAD` responses are stored (override with
+`methods`). Concurrent identical requests share one in-flight request. The default key is
+`method + url`; add header names with `vary` or supply your own `key` function. The store is an
+in-memory `Map` unless you pass `storage` (any object implementing `CacheStorage`, sync or async).
+
+```ts
+cache: { ttl: 30_000, vary: ['Authorization'], tags: ['user'] }
+
+await github.$cache.invalidate('user', 'repos');
+await github.$cache.delete('GET https://api.github.com/users/octocat');
+await github.$cache.clear();
+```
+
+This is deliberately small. For stale-while-revalidate, background refetching or optimistic
+updates, pair the client with TanStack Query or SWR and leave `cache` off.
+
+## Middlewares
+
+A middleware wraps the transport: `(request, next, context) => Promise<AdapterResponse>`. Call
+`next` to continue, return a response to short-circuit, throw to fail. Repository middlewares run
+outermost, then route middlewares, then the built-in cache, retry, timeout and hooks, then the
+adapter.
+
+```ts
+import type { Middleware } from 'api-repositories';
+
+const logging: Middleware = async (request, next, { route, attempt }) => {
+  const started = Date.now();
+  const response = await next(request);
+  console.log(route, attempt, response.status, `${Date.now() - started}ms`);
+  return response;
+};
+
+const refreshOn401: Middleware = async (request, next) => {
+  const response = await next(request);
+  if (response.status !== 401) return response;
+  const token = await refreshToken();
+  return next({ ...request, headers: { ...request.headers, authorization: `Bearer ${token}` } });
+};
+
+createRepository({ baseUrl, middlewares: [logging, refreshOn401] });
+createRoute({ method: 'GET', path: '/x', middlewares: [mockInDev] });
+```
 
 ## Adapters
 
@@ -184,7 +286,7 @@ non-2xx statuses; the repository decides what counts as a failure.
 ## Errors
 
 ```ts
-import { ApiError, ValidationError } from 'api-repositories';
+import { ApiError, TimeoutError, ValidationError } from 'api-repositories';
 
 try {
   await github.getUser({ params: { username: 'nobody' } });
@@ -197,6 +299,9 @@ try {
   if (error instanceof ValidationError) {
     error.target; // 'params' | 'query' | 'body' | 'response'
     error.issues; // Standard Schema issues
+  }
+  if (error instanceof TimeoutError) {
+    error.timeout; // ms
   }
 }
 ```
