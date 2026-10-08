@@ -279,7 +279,7 @@ async function execute(
     const response = await buildPipeline(name, route, runtime, input)(request);
 
     if (!runtime.isSuccess(response.status)) {
-      throw failureFor(name, route, config, response);
+      throw await failureFor(name, route, config, response);
     }
 
     const data =
@@ -303,12 +303,12 @@ async function execute(
 }
 
 /** A custom error from the route or repository `errors` map, or an {@link ApiError}. */
-function failureFor(
+async function failureFor(
   name: string,
   route: AnyRoute,
   config: RepositoryConfig,
   response: AdapterResponse,
-): TaggedError {
+): Promise<TaggedError> {
   const factory: ErrorFactory | undefined =
     route.errors?.[response.status] ?? config.errors?.[response.status];
   if (factory) {

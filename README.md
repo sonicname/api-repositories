@@ -347,14 +347,14 @@ non-2xx statuses; the repository decides what counts as a failure.
 `error` is always a `TaggedError`: an `Error` with a literal `_tag` to discriminate on. The
 built-in ones form the `RouteError` union:
 
-| Class             | `_tag`              | When                                                                               |
-| ----------------- | ------------------- | ---------------------------------------------------------------------------------- |
-| `ApiError`        | `'ApiError'`        | Non-success status with no custom error declared. Has `status`, `data`, `headers`. |
-| `ValidationError` | `'ValidationError'` | Params, query, body or response failed its schema. Has `target`, `issues`.         |
-| `TimeoutError`    | `'TimeoutError'`    | The per-attempt timeout fired. Has `timeout`.                                      |
-| `AbortError`      | `'AbortError'`      | The caller's `signal` aborted. `cause` is the reason.                              |
-| `NetworkError`    | `'NetworkError'`    | The transport could not reach the server. `cause` is the raw error.                |
-| `UnknownError`    | `'UnknownError'`    | Anything else thrown (a middleware bug...). `cause` is the raw value.              |
+| Class             | `_tag`              | When                                                                                   |
+| ----------------- | ------------------- | -------------------------------------------------------------------------------------- |
+| `ApiError`        | `'ApiError'`        | Non-success status with no custom error declared. Has `status`, `data`, `headers`.     |
+| `ValidationError` | `'ValidationError'` | Params, query, body, response or error body failed its schema. Has `target`, `issues`. |
+| `TimeoutError`    | `'TimeoutError'`    | The per-attempt timeout fired. Has `timeout`.                                          |
+| `AbortError`      | `'AbortError'`      | The caller's `signal` aborted. `cause` is the reason.                                  |
+| `NetworkError`    | `'NetworkError'`    | The transport could not reach the server. `cause` is the raw error.                    |
+| `UnknownError`    | `'UnknownError'`    | Anything else thrown (a middleware bug...). `cause` is the raw value.                  |
 
 Every error carries `route`, the name of the route that was called.
 
@@ -394,8 +394,26 @@ const { error } = await github.getRepo({ params: { owner: 'octocat', repo: 'x' }
 ```
 
 Route factories take precedence over repository ones. Any other failing status is an `ApiError`.
-The factory context has `status`, `statusText`, `headers`, `data` (parsed body) and `route`.
-Tagged errors thrown from your own middlewares pass through untouched as well.
+The factory context has `status`, `statusText`, `headers`, `data` (parsed body, `unknown`) and
+`route`. Factories may be async. Tagged errors thrown from your own middlewares pass through
+untouched as well.
+
+To get a typed body, wrap the factory with `errorFromSchema`. The body is validated first and
+`map` receives the schema output; a body that does not match yields a `ValidationError` with
+`target: 'error'`.
+
+```ts
+import { errorFromSchema } from 'endpoint-kit';
+
+const notFoundBody = z.object({ resource: z.string(), id: z.coerce.number() });
+
+const getRepo = createRoute.get('/repos/:id', {
+  errors: {
+    404: errorFromSchema(notFoundBody, (data) => new NotFoundError(data.resource, data.id)),
+    //                                   ^? { resource: string; id: number }
+  },
+});
+```
 
 ### Handling errors
 

@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-export { createRoute } from './route.js';
+export { createRoute, errorFromSchema } from './route.js';
 export type {
   AnyRoute,
   CallOptions,

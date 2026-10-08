@@ -1,4 +1,5 @@
 import type { HttpMethod, ResponseType } from './adapters/types.js';
+import { ValidationError } from './errors.js';
 import type { RouteError, TaggedError } from './errors.js';
 import type { CacheOptions } from './middleware/cache.js';
 import type { RetryOptions } from './middleware/retry.js';
@@ -84,17 +85,41 @@ type CheckParamKeys<
 // ---------------------------------------------------------------------------
 
 /** What an error factory receives: the failed response plus the route name. */
-export interface ErrorContext {
+export interface ErrorContext<TData = unknown> {
   status: number;
   statusText: string;
   headers: Record<string, string>;
   /** Parsed response body. */
-  data: unknown;
+  data: TData;
   route: string;
 }
 
-/** Builds a custom error for a status code. Must return a {@link TaggedError}. */
-export type ErrorFactory = (context: ErrorContext) => TaggedError;
+/** Builds a custom error for a status code. May be async. Must return a {@link TaggedError}. */
+export type ErrorFactory<TError extends TaggedError = TaggedError> = (
+  context: ErrorContext,
+) => TError | Promise<TError>;
+
+/**
+ * An error factory whose `data` is validated against `schema` first, so `map` receives it
+ * typed. A body that does not match yields a `ValidationError` with target `'error'`.
+ *
+ * @example
+ * ```ts
+ * errors: {
+ *   404: errorFromSchema(z.object({ resource: z.string() }), (data) => new NotFoundError(data.resource)),
+ * }
+ * ```
+ */
+export function errorFromSchema<TSchema extends AnySchema, TError extends TaggedError>(
+  schema: TSchema,
+  map: (data: StandardSchemaV1.InferOutput<TSchema>, context: ErrorContext) => TError,
+): ErrorFactory<TError> {
+  return async (context) => {
+    const result = await schema['~standard'].validate(context.data);
+    if (result.issues) throw new ValidationError('error', result.issues, context.route);
+    return map(result.value, context);
+  };
+}
 
 /** Custom errors keyed by HTTP status. The factory's return type becomes part of `error`'s type. */
 export type ErrorFactories = Readonly<Record<number, ErrorFactory>>;
@@ -111,7 +136,7 @@ export type InferErrors<E> = [NonNullable<E>] extends [never]
   : ErrorFactories extends NonNullable<E>
     ? never
     : NonNullable<E>[keyof NonNullable<E>] extends (...args: never[]) => infer R
-      ? Extract<R, TaggedError>
+      ? Extract<Awaited<R>, TaggedError>
       : never;
 
 // ---------------------------------------------------------------------------
