@@ -1,7 +1,7 @@
-# api-repositories
+# endpoint-kit
 
-[![CI](https://github.com/egohub/api-repositories/actions/workflows/ci.yml/badge.svg)](https://github.com/egohub/api-repositories/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/api-repositories.svg)](https://www.npmjs.com/package/api-repositories)
+[![CI](https://github.com/sonicname/api-repositories/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicname/api-repositories/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/endpoint-kit.svg)](https://www.npmjs.com/package/endpoint-kit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 Declare your backend endpoints once, get a fully typed API client.
@@ -25,7 +25,7 @@ Declare your backend endpoints once, get a fully typed API client.
 ## Install
 
 ```bash
-pnpm add api-repositories zod
+pnpm add endpoint-kit zod
 ```
 
 Zod is optional. Any schema library implementing Standard Schema works.
@@ -33,7 +33,7 @@ Zod is optional. Any schema library implementing Standard Schema works.
 ## Quick start
 
 ```ts
-import { createRepository, createRoute } from 'api-repositories';
+import { createRepository, createRoute } from 'endpoint-kit';
 import { z } from 'zod';
 
 const getUser = createRoute({
@@ -118,7 +118,7 @@ part of every route's params. The result is a plain route map, so groups nest an
 `mergeAll`.
 
 ```ts
-import { groupRoutes } from 'api-repositories';
+import { groupRoutes } from 'endpoint-kit';
 
 const admin = groupRoutes('/admin', {
   listUsers: createRoute.get('/users'),
@@ -292,7 +292,7 @@ outermost, then route middlewares, then the built-in cache, retry, timeout and h
 adapter.
 
 ```ts
-import type { Middleware } from 'api-repositories';
+import type { Middleware } from 'endpoint-kit';
 
 const logging: Middleware = async (request, next, { route, attempt }) => {
   const started = Date.now();
@@ -317,7 +317,7 @@ createRoute({ method: 'GET', path: '/x', middlewares: [mockInDev] });
 ```ts
 import axios from 'axios';
 import { ofetch } from 'ofetch';
-import { axiosAdapter, fetchAdapter, ofetchAdapter } from 'api-repositories';
+import { axiosAdapter, fetchAdapter, ofetchAdapter } from 'endpoint-kit';
 
 createRepository({ baseUrl, adapter: fetchAdapter() });
 createRepository({ baseUrl, adapter: axiosAdapter(axios.create({ timeout: 5000 })) });
@@ -331,7 +331,7 @@ non-2xx statuses; the repository decides what counts as a failure.
 ## Errors
 
 ```ts
-import { ApiError, TimeoutError, ValidationError } from 'api-repositories';
+import { ApiError, TimeoutError, ValidationError } from 'endpoint-kit';
 
 try {
   await github.getUser({ params: { username: 'nobody' } });
@@ -354,7 +354,7 @@ try {
 ## Type helpers
 
 ```ts
-import type { RouteInput, RouteOutput } from 'api-repositories';
+import type { RouteInput, RouteOutput } from 'endpoint-kit';
 
 type GetUserInput = RouteInput<typeof getUser>;
 type GetUserOutput = RouteOutput<typeof getUser>;
