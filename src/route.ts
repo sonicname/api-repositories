@@ -169,6 +169,47 @@ export function createRoute<
   return definition;
 }
 
+/** Everything a route accepts except `method` and `path`, for the method helpers. */
+export type RouteOptions<
+  TPath extends string,
+  TParams extends ParamsSpec<TPath>,
+  TQuery extends SchemaOrUndefined,
+  TBody extends SchemaOrUndefined,
+  TResponse extends SchemaOrUndefined,
+  TResponseType extends ResponseType,
+> = Omit<
+  RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType>,
+  'method' | 'path'
+>;
+
+/** Signature shared by `createRoute.get`, `createRoute.post`, ... */
+export type MethodRouteFactory = <
+  const TPath extends string,
+  TParams extends ParamsSpec<TPath> = undefined,
+  TQuery extends SchemaOrUndefined = undefined,
+  TBody extends SchemaOrUndefined = undefined,
+  TResponse extends SchemaOrUndefined = undefined,
+  TResponseType extends ResponseType = 'json',
+>(
+  path: TPath,
+  options?: RouteOptions<TPath, TParams, TQuery, TBody, TResponse, TResponseType> & {
+    params?: NoInfer<ValidateParams<TPath, TParams>>;
+  },
+) => RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType>;
+
+function methodFactory(method: HttpMethod): MethodRouteFactory {
+  return (path, options) => ({ ...options, method, path });
+}
+
+/** `createRoute.get('/users/:id', { response })` is `createRoute({ method: 'GET', path: '/users/:id', response })`. */
+createRoute.get = methodFactory('GET');
+createRoute.post = methodFactory('POST');
+createRoute.put = methodFactory('PUT');
+createRoute.patch = methodFactory('PATCH');
+createRoute.delete = methodFactory('DELETE');
+createRoute.head = methodFactory('HEAD');
+createRoute.options = methodFactory('OPTIONS');
+
 // ---------------------------------------------------------------------------
 // Type inference helpers
 // ---------------------------------------------------------------------------
@@ -228,8 +269,20 @@ type MappedParams<TPath extends string, TMap> = [PathParamNames<TPath>] extends 
 export type RouteParams<R extends AnyRoute> = [NonNullable<R['params']>] extends [never]
   ? PathParams<R['path']>
   : NonNullable<R['params']> extends AnySchema
-    ? StandardSchemaV1.InferInput<NonNullable<R['params']>>
+    ? Simplify<
+        StandardSchemaV1.InferInput<NonNullable<R['params']>> &
+          ExtraPathParams<R['path'], keyof StandardSchemaV1.InferInput<NonNullable<R['params']>>>
+      >
     : MappedParams<R['path'], NonNullable<R['params']>>;
+
+/**
+ * Path params not covered by a whole-object schema. Empty for routes created with
+ * `createRoute` (the schema must cover the path), non-empty after `groupRoutes` added a
+ * prefix with its own params.
+ */
+type ExtraPathParams<TPath extends string, Known extends PropertyKey> = {
+  [K in Exclude<PathParamNames<TPath>, Known>]: string | number;
+};
 
 /** Query accepted by a route, or `never` when it has no query schema. */
 export type RouteQuery<R extends AnyRoute> = InputOf<R['query']>;

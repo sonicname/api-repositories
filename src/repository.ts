@@ -335,8 +335,9 @@ async function validateParams(
 ): Promise<Record<string, unknown> | undefined> {
   if (spec === undefined) return value;
   if (isSchema(spec)) {
-    return (await validate(routeName, 'params', spec, value)) as
-      Record<string, unknown> | undefined;
+    const parsed = await validate(routeName, 'params', spec, value);
+    // Keep params the schema does not know about (added by a group prefix).
+    return { ...value, ...(parsed as Record<string, unknown> | undefined) };
   }
 
   const result: Record<string, unknown> = { ...value };

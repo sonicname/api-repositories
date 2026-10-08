@@ -10,6 +10,8 @@ Declare your backend endpoints once, get a fully typed API client.
   [Standard Schema](https://standardschema.dev) library such as Valibot or ArkType).
 - **Full IDE inference**: path params are inferred from `"/users/:username"`, inputs come from the
   schema input types, the result is the response schema output type.
+- **Organised**: `createRoute.get('/path', {...})` shorthands and `groupRoutes` to prefix and
+  share settings across a set of routes.
 - **Transport agnostic**: ships with adapters for `fetch` (default), axios and ofetch. Write your
   own in a few lines.
 - **Validated at runtime**: bad inputs are rejected before the request is sent, unexpected
@@ -97,6 +99,49 @@ const issue = await github.createIssue({
 | `options`      | Adapter specific options (axios config, ofetch options, `RequestInit`).                                                                                                                                                   |
 
 A route can be reused across several repositories.
+
+### Method helpers
+
+`createRoute.get`, `.post`, `.put`, `.patch`, `.delete`, `.head` and `.options` take the path
+first and the remaining fields second. Inference and the params check are identical.
+
+```ts
+const getUser = createRoute.get('/users/:username', { response: userSchema });
+const createIssue = createRoute.post('/repos/:owner/:repo/issues', { body: issueSchema });
+const ping = createRoute.get('/ping', { responseType: 'text' });
+```
+
+### Groups
+
+`groupRoutes` prefixes a set of routes and can apply shared settings. Params in the prefix become
+part of every route's params. The result is a plain route map, so groups nest and spread into
+`mergeAll`.
+
+```ts
+import { groupRoutes } from 'api-repositories';
+
+const admin = groupRoutes('/admin', {
+  listUsers: createRoute.get('/users'),
+  getUser: createRoute.get('/users/:id'), // path "/admin/users/:id"
+});
+
+const org = groupRoutes(
+  { prefix: '/orgs/:org', headers: { 'x-scope': 'org' }, retry: 2, cache: 10_000 },
+  {
+    listRepos: createRoute.get('/repos'), // params: { org }
+    getRepo: createRoute.get('/repos/:repo'), // params: { org, repo }
+  },
+);
+
+const api = createRepository({ baseUrl })
+  .mergeAll({ ...admin, ...org })
+  .build();
+await api.getRepo({ params: { org: 'acme', repo: 'web' } });
+```
+
+Group `headers` and `options` are merged under the route's own, group `middlewares` run outside
+the route's own, and group `timeout`, `retry` and `cache` apply only to routes that do not set
+them. Write the prefix without a trailing slash.
 
 ### Path params
 

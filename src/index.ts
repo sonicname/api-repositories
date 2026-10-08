@@ -8,6 +8,8 @@ export { createRoute } from './route.js';
 export type {
   AnyRoute,
   CallOptions,
+  MethodRouteFactory,
+  RouteOptions,
   PathParamNames,
   PathParams,
   ParamsSchemaMap,
@@ -78,4 +80,6 @@ export type {
   CacheStorage,
 } from './middleware/cache.js';
 export { resolvePolicy, resolveTimeout } from './policy.js';
+export { groupRoutes } from './group.js';
+export type { GroupOptions, GroupedRoutes, PrefixedRoute } from './group.js';
 export type { PolicyInput } from './policy.js';
