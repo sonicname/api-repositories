@@ -24,6 +24,18 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/explicit-module-boundary-types': 'error',
+      // Mapped types like `{ [P in K]?: T }` are clearer than Partial<Record<K, T>> here.
+      '@typescript-eslint/consistent-indexed-object-style': 'off',
+      // `Record<never, never>` is used on purpose as the "no routes yet" type.
+      '@typescript-eslint/no-generated-empty-object-type': 'off',
+    },
+  },
+  {
+    files: ['tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
   eslintConfigPrettier,

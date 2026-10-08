@@ -2,63 +2,189 @@
 
 [![CI](https://github.com/egohub/api-repositories/actions/workflows/ci.yml/badge.svg)](https://github.com/egohub/api-repositories/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/api-repositories.svg)](https://www.npmjs.com/package/api-repositories)
-[![npm downloads](https://img.shields.io/npm/dm/api-repositories.svg)](https://www.npmjs.com/package/api-repositories)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-A production-ready TypeScript library boilerplate for publishing to npm.
+Declare your backend endpoints once, get a fully typed API client.
 
-## Features
+- **Schema driven**: `params`, `query`, `body` and `response` are described with Zod v4 (or any
+  [Standard Schema](https://standardschema.dev) library such as Valibot or ArkType).
+- **Full IDE inference**: path params are inferred from `"/users/:username"`, inputs come from the
+  schema input types, the result is the response schema output type.
+- **Transport agnostic**: ships with adapters for `fetch` (default), axios and ofetch. Write your
+  own in a few lines.
+- **Validated at runtime**: bad inputs are rejected before the request is sent, unexpected
+  responses throw a `ValidationError`, non-2xx statuses throw an `ApiError`.
+- **Tiny**: no runtime dependencies, under 4 kB minified.
 
-- **TypeScript** with the strictest compiler options enabled
-- **Dual ESM + CJS** output with type declarations for both, built by [tsup](https://tsup.egoist.dev)
-- **Vitest** for tests with V8 coverage and thresholds
-- **ESLint** (typed, flat config) + **Prettier**
-- **Husky**, **lint-staged** and **commitlint** (Conventional Commits) git hooks
-- **Changesets** for versioning, changelog and publishing
-- **GitHub Actions**: CI matrix across Node 18 to 24 on Linux and Windows, automated release with npm provenance
-- **publint** and **Are The Types Wrong** to validate the published package
-- **size-limit** to keep bundle size in check
-- **TypeDoc** for API documentation
-- Dependabot, issue and PR templates, VS Code settings, EditorConfig
-
-## Installation
+## Install
 
 ```bash
-pnpm add api-repositories
-# or
-npm install api-repositories
+pnpm add api-repositories zod
 ```
 
-## Usage
+Zod is optional. Any schema library implementing Standard Schema works.
+
+## Quick start
 
 ```ts
-import { greet, sum, clamp, Repository } from 'api-repositories';
+import { createRepository, createRoute } from 'api-repositories';
+import { z } from 'zod';
 
-greet('World'); // "Hello, World!"
-sum([1, 2, 3]); // 6
-clamp(15, 0, 10); // 10
+const getUser = createRoute({
+  method: 'GET',
+  path: '/users/:username',
+  response: z.object({ id: z.number(), login: z.string() }),
+});
 
-const users = new Repository<{ id: string; name: string }>();
-users.save({ id: '1', name: 'Ann' });
-users.find('1'); // { id: '1', name: 'Ann' }
+const listRepos = createRoute({
+  method: 'GET',
+  path: '/users/:username/repos',
+  query: z.object({
+    page: z.number().int().positive().optional(),
+    sort: z.enum(['created', 'updated']).optional(),
+  }),
+  response: z.array(z.object({ name: z.string(), stargazers_count: z.number() })),
+});
+
+const createIssue = createRoute({
+  method: 'POST',
+  path: '/repos/:owner/:repo/issues',
+  params: z.object({ owner: z.string().min(1), repo: z.string().min(1) }),
+  body: z.object({ title: z.string().min(1), labels: z.array(z.string()).default([]) }),
+  response: z.object({ number: z.number(), html_url: z.string() }),
+});
+
+const github = createRepository({
+  baseUrl: 'https://api.github.com',
+  headers: () => ({ authorization: `Bearer ${getToken()}` }),
+})
+  .mergeAll({ getUser, listRepos, createIssue })
+  .build();
+
+// Everything below is fully typed and autocompleted.
+const user = await github.getUser({ params: { username: 'octocat' } });
+//    ^? { id: number; login: string }
+
+const repos = await github.listRepos({
+  params: { username: 'octocat' },
+  query: { sort: 'updated' },
+});
+
+const issue = await github.createIssue({
+  params: { owner: 'octocat', repo: 'hello-world' },
+  body: { title: 'Bug report' }, // labels is optional thanks to .default([])
+});
 ```
 
-CommonJS works too:
+## Routes
 
-```js
-const { greet } = require('api-repositories');
+`createRoute` accepts:
+
+| Field          | Description                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| `method`       | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` or `OPTIONS`.                                |
+| `path`         | Path relative to `baseUrl`. `:name` segments become path params.                             |
+| `params`       | Schema for path params. Optional. Without it, params are inferred from `path`.               |
+| `query`        | Schema for the query string. Arrays become repeated keys, `undefined` values are skipped.    |
+| `body`         | Schema for the request body. Plain objects are JSON encoded, `FormData`/`Blob` pass through. |
+| `response`     | Schema for the response body. Its output type is what the caller resolves with.              |
+| `responseType` | `json` (default), `text`, `blob`, `arrayBuffer` or `none`.                                   |
+| `headers`      | Static headers for this route.                                                               |
+| `options`      | Adapter specific options (axios config, ofetch options, `RequestInit`).                      |
+
+A route can be reused across several repositories.
+
+## Calling a route
+
+Each route becomes a function on the built client. It takes a single object with `params`,
+`query` and `body` (only the ones the route declares, required only when the schema has required
+keys) plus:
+
+```ts
+await github.getUser({
+  params: { username: 'octocat' },
+  headers: { 'x-request-id': '123' }, // merged over repository and route headers
+  signal: controller.signal,
+  options: { cache: 'no-store' }, // merged over repository and route options
+});
 ```
 
-## Using this as a template
+When nothing is required, the argument can be omitted entirely: `await api.ping()`.
 
-1. Clone or click "Use this template" on GitHub.
-2. Search and replace `api-repositories` with your package name, and `egohub/api-repositories` with your GitHub repo.
-3. Update `author`, `description` and `keywords` in `package.json`, and the copyright line in `LICENSE`.
-4. Replace the example code in `src/` and tests in `tests/`.
-5. Add `NPM_TOKEN` (an npm automation token) to the repository secrets. Add `CODECOV_TOKEN` if you want coverage reports.
-6. Run `pnpm install`.
+Use `.raw()` to also get status and headers:
 
-## Scripts
+```ts
+const { data, status, headers } = await github.getUser.raw({ params: { username: 'octocat' } });
+```
+
+`client.$routes` holds the definitions and `client.$config` the resolved configuration.
+
+## Repository options
+
+```ts
+createRepository({
+  baseUrl: 'https://api.example.com',
+  adapter: fetchAdapter({ init: { credentials: 'include' } }), // default: fetchAdapter()
+  headers: async () => ({ authorization: `Bearer ${await getToken()}` }),
+  options: {}, // adapter specific, merged into every request
+  validateResponse: true, // set false to skip response schema validation
+  isSuccess: (status) => status < 400, // default: 200 <= status < 300
+  hooks: {
+    onRequest: ({ route, request }) => {},
+    onResponse: ({ route, request, response }) => {},
+    onError: ({ route, request, error }) => {},
+  },
+});
+```
+
+Routes can be registered with `.mergeAll({ ... })` or one at a time with `.addRoute('name', route)`.
+
+## Adapters
+
+```ts
+import axios from 'axios';
+import { ofetch } from 'ofetch';
+import { axiosAdapter, fetchAdapter, ofetchAdapter } from 'api-repositories';
+
+createRepository({ baseUrl, adapter: fetchAdapter() });
+createRepository({ baseUrl, adapter: axiosAdapter(axios.create({ timeout: 5000 })) });
+createRepository({ baseUrl, adapter: ofetchAdapter(ofetch.create({ retry: 2 })) });
+```
+
+Neither axios nor ofetch is a dependency of this package. A custom adapter only needs a
+`request(request: AdapterRequest): Promise<AdapterResponse>` method and must not throw on
+non-2xx statuses; the repository decides what counts as a failure.
+
+## Errors
+
+```ts
+import { ApiError, ValidationError } from 'api-repositories';
+
+try {
+  await github.getUser({ params: { username: 'nobody' } });
+} catch (error) {
+  if (error instanceof ApiError) {
+    error.status; // 404
+    error.data; // parsed body
+    error.route; // 'getUser'
+  }
+  if (error instanceof ValidationError) {
+    error.target; // 'params' | 'query' | 'body' | 'response'
+    error.issues; // Standard Schema issues
+  }
+}
+```
+
+## Type helpers
+
+```ts
+import type { RouteInput, RouteOutput } from 'api-repositories';
+
+type GetUserInput = RouteInput<typeof getUser>;
+type GetUserOutput = RouteOutput<typeof getUser>;
+```
+
+## Development
 
 | Script               | Description                                                |
 | -------------------- | ---------------------------------------------------------- |
@@ -69,48 +195,17 @@ const { greet } = require('api-repositories');
 | `pnpm test:coverage` | Run tests with coverage                                    |
 | `pnpm typecheck`     | Type-check without emitting                                |
 | `pnpm lint`          | Lint with ESLint                                           |
-| `pnpm lint:fix`      | Lint and fix                                               |
 | `pnpm format`        | Format with Prettier                                       |
-| `pnpm format:check`  | Check formatting                                           |
 | `pnpm check:exports` | Validate `package.json` exports and types (attw + publint) |
 | `pnpm size`          | Check bundle size against `.size-limit.json`               |
 | `pnpm docs:api`      | Generate API docs into `docs/`                             |
 | `pnpm check`         | Run everything CI runs                                     |
 | `pnpm changeset`     | Add a changeset describing your change                     |
-| `pnpm release`       | Build and publish (used by the release workflow)           |
 
-## Release workflow
+Releases are driven by [Changesets](https://github.com/changesets/changesets): run
+`pnpm changeset`, merge to `main`, merge the generated "Version Packages" PR.
 
-1. Make changes and run `pnpm changeset` to describe them.
-2. Merge to `main`. The release workflow opens a "Version Packages" PR that bumps the version and updates `CHANGELOG.md`.
-3. Merge that PR. The workflow builds, publishes to npm with provenance, and creates a GitHub release.
-
-To publish manually instead:
-
-```bash
-pnpm changeset version
-pnpm release
-```
-
-## Project structure
-
-```
-.
-├── .changeset/          # Pending changesets and config
-├── .github/             # CI, release, Dependabot, templates
-├── .husky/              # Git hooks
-├── src/                 # Library source (src/index.ts is the entry)
-├── tests/               # Vitest tests
-├── eslint.config.js
-├── pnpm-workspace.yaml  # pnpm settings (allowed build scripts)
-├── tsconfig.json
-├── tsup.config.ts
-└── vitest.config.ts
-```
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 
 ## License
 

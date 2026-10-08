@@ -1,12 +1,18 @@
 {
   "name": "api-repositories",
   "version": "0.0.0",
-  "description": "A TypeScript library boilerplate ready to publish to npm",
+  "description": "Declare backend endpoints once with Zod (or any Standard Schema) and get a fully typed API client for fetch, axios or ofetch",
   "keywords": [
     "typescript",
-    "library",
-    "boilerplate",
-    "npm"
+    "api",
+    "client",
+    "repository",
+    "zod",
+    "standard-schema",
+    "fetch",
+    "axios",
+    "ofetch",
+    "type-safe"
   ],
   "homepage": "https://github.com/sonicname/api-repositories#readme",
   "bugs": {
@@ -103,6 +109,7 @@
     "typedoc": "^0.28.20",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.1",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "zod": "^4.6.5"
   }
 }
