@@ -63,6 +63,6 @@ describe('createRoute.<method>', () => {
       .build();
 
     expectTypeOf(api.ping).parameters.toExtend<[input?: unknown]>();
-    expectTypeOf(api.ping).returns.resolves.toEqualTypeOf<string>();
+    expectTypeOf(api.ping.orThrow).returns.resolves.toEqualTypeOf<string>();
   });
 });

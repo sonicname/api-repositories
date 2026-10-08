@@ -67,16 +67,16 @@ describe('type inference', () => {
       .build();
 
     expectTypeOf(api.getUser).parameter(0).toEqualTypeOf<RouteInput<typeof getUser>>();
-    expectTypeOf(api.getUser).returns.resolves.toEqualTypeOf<{ id: number }>();
-    expectTypeOf(api.getUser.raw).returns.resolves.toHaveProperty('status');
+    expectTypeOf(api.getUser.orThrow).returns.resolves.toEqualTypeOf<{ id: number }>();
+    expectTypeOf(api.getUser).returns.resolves.toHaveProperty('error');
     expectTypeOf(api.ping).parameters.toEqualTypeOf<[input?: RouteInput<typeof ping>]>();
-    expectTypeOf(api.ping).returns.resolves.toEqualTypeOf<string>();
+    expectTypeOf(api.ping.orThrow).returns.resolves.toEqualTypeOf<string>();
     expectTypeOf(api.$routes.getUser).toEqualTypeOf<typeof getUser>();
 
     // Never executed, only type-checked.
     const typeOnly = () => {
       // @ts-expect-error params are required
-      void api.getUser();
+      void api.getUser.orThrow();
     };
     expectTypeOf(typeOnly).toBeFunction();
     expectTypeOf(api).not.toHaveProperty('nope');
@@ -89,7 +89,7 @@ describe('type inference', () => {
       .build();
 
     expectTypeOf(api.ping).parameters.toExtend<[input?: unknown]>();
-    expectTypeOf(api.ping).returns.resolves.toEqualTypeOf<string>();
+    expectTypeOf(api.ping.orThrow).returns.resolves.toEqualTypeOf<string>();
     expectTypeOf(api.user).parameter(0).toHaveProperty('params');
     expectTypeOf(api.user).parameter(0).not.toHaveProperty('query');
     expectTypeOf(api.user).parameter(0).not.toHaveProperty('body');

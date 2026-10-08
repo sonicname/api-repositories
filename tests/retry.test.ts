@@ -220,11 +220,11 @@ describe('retry policy on a repository', () => {
       .build();
 
     // route says 2 attempts, repo says delay 0 → 2 calls, then ApiError 503
-    await expect(api.route()).rejects.toBeInstanceOf(ApiError);
+    await expect(api.route.orThrow()).rejects.toBeInstanceOf(ApiError);
     expect(adapter.calls).toBe(2);
 
     // call level bumps attempts to 5 → succeeds on the 4th response overall
-    await expect(api.route({ retry: 5 })).resolves.toEqual({ status: 200 });
+    await expect(api.route.orThrow({ retry: 5 })).resolves.toEqual({ status: 200 });
     expect(adapter.calls).toBe(4);
   });
 
@@ -234,7 +234,7 @@ describe('retry policy on a repository', () => {
       .mergeAll({ route: createRoute({ method: 'GET', path: '/x' }) })
       .build();
 
-    await expect(api.route({ retry: false })).rejects.toBeInstanceOf(ApiError);
+    await expect(api.route.orThrow({ retry: false })).rejects.toBeInstanceOf(ApiError);
     expect(adapter.calls).toBe(1);
   });
 });

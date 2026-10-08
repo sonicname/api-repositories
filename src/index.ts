@@ -8,24 +8,31 @@ export { createRoute } from './route.js';
 export type {
   AnyRoute,
   CallOptions,
+  ErrorContext,
+  ErrorFactories,
+  ErrorFactory,
+  ErrorsSpec,
+  InferErrors,
   MethodRouteFactory,
-  RouteOptions,
-  PathParamNames,
-  PathParams,
   ParamsSchemaMap,
   ParamsSpec,
-  ValidateParams,
+  PathParamNames,
+  PathParams,
   RouteArgs,
   RouteBody,
   RouteCaller,
   RouteDefinition,
+  RouteErrors,
+  RouteFailure,
   RouteInput,
   RouteMap,
+  RouteOptions,
   RouteOutput,
   RouteParams,
   RouteQuery,
-  RouteResponse,
+  RouteResult,
   SchemaOrUndefined,
+  ValidateParams,
 } from './route.js';
 
 export { createRepository, RepositoryBuilder } from './repository.js';
@@ -37,6 +44,9 @@ export type {
   RepositoryHooks,
 } from './repository.js';
 
+export { groupRoutes } from './group.js';
+export type { GroupOptions, GroupedRoutes, PrefixedRoute } from './group.js';
+
 export {
   AbortError,
   ApiError,
@@ -45,13 +55,10 @@ export {
   TimeoutError,
   UnknownError,
   ValidationError,
-  hasTag,
-  isTaggedError,
+  matchError,
   toRouteError,
 } from './errors.js';
-export type { ErrorByTag, RouteError, RouteErrorTag, ValidationTarget } from './errors.js';
-export { catchTag, catchTags, err, matchError, ok, toResult } from './result.js';
-export type { ErrorHandlers, HandlerResult, Result, RouteErrorHandlers } from './result.js';
+export type { ErrorHandlers, HandlerResult, RouteError, ValidationTarget } from './errors.js';
 
 export { fetchAdapter } from './adapters/fetch.js';
 export type { FetchAdapterOptions } from './adapters/fetch.js';
@@ -66,9 +73,6 @@ export type {
   HttpMethod,
   ResponseType,
 } from './adapters/types.js';
-
-export type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
-export { buildQueryString, buildUrl, interpolatePath, joinUrl, toStringValue } from './url.js';
 
 export { composeMiddlewares } from './middleware/types.js';
 export type { Middleware, MiddlewareContext, NextFunction } from './middleware/types.js';
@@ -93,6 +97,7 @@ export type {
   CacheStorage,
 } from './middleware/cache.js';
 export { resolvePolicy, resolveTimeout } from './policy.js';
-export { groupRoutes } from './group.js';
-export type { GroupOptions, GroupedRoutes, PrefixedRoute } from './group.js';
 export type { PolicyInput } from './policy.js';
+
+export type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
+export { buildQueryString, buildUrl, interpolatePath, joinUrl, toStringValue } from './url.js';

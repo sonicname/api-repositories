@@ -2,11 +2,9 @@ import type { StandardSchemaV1 } from './standard-schema.js';
 
 /**
  * Base class of every error this library produces. The `_tag` discriminant makes
- * narrowing trivial: `if (error._tag === 'ApiError')`, `hasTag(error, 'ApiError')`,
- * `matchError(error, { ApiError: ..., _: ... })`.
+ * narrowing trivial: `if (error._tag === 'ApiError')` or `matchError(error, {...})`.
  *
- * Extend it in your own middlewares to add tags of your own; they pass through
- * untouched and reach `matchError`'s `_` fallback.
+ * Extend it for custom errors declared in `errors` maps or thrown from middlewares.
  */
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Tag is the discriminant subclasses pin down
 export abstract class TaggedError<Tag extends string = string> extends Error {
@@ -113,39 +111,84 @@ export class UnknownError extends TaggedError<'UnknownError'> {
   }
 }
 
-/** Every error a route call can reject with. */
+/** The built-in errors a route call can produce. Custom ones are added per route or repository. */
 export type RouteError =
   ApiError | ValidationError | TimeoutError | AbortError | NetworkError | UnknownError;
 
-/** The `_tag` values of {@link RouteError}. */
-export type RouteErrorTag = RouteError['_tag'];
-
-/** The {@link RouteError} member carrying `Tag`. */
-export type ErrorByTag<Tag extends RouteErrorTag> = Extract<RouteError, { _tag: Tag }>;
-
-/** `true` for any {@link TaggedError}, including user-defined ones. */
-export function isTaggedError(value: unknown): value is TaggedError {
-  return value instanceof TaggedError;
-}
-
-/** Type guard on the `_tag` of a {@link RouteError}. */
-export function hasTag<Tag extends RouteErrorTag>(
-  error: unknown,
-  tag: Tag,
-): error is ErrorByTag<Tag> {
-  return isTaggedError(error) && error._tag === tag;
-}
-
 /**
- * Normalise anything thrown during a route call into a {@link RouteError}.
- * Tagged errors pass through, aborts become {@link AbortError}, transport failures
- * become {@link NetworkError}, everything else {@link UnknownError}.
+ * Normalise anything thrown during a route call into a {@link TaggedError}.
+ * Tagged errors (built-in or custom) pass through, aborts become {@link AbortError},
+ * transport failures become {@link NetworkError}, everything else {@link UnknownError}.
  */
-export function toRouteError(error: unknown, route: string): RouteError {
-  if (isTaggedError(error)) return error as RouteError;
+export function toRouteError(error: unknown, route: string): TaggedError {
+  if (isTaggedError(error)) return error;
   if (isAbort(error)) return new AbortError(route, error);
   if (isNetworkFailure(error)) return new NetworkError(route, error);
   return new UnknownError(route, error);
+}
+
+// ---------------------------------------------------------------------------
+// matchError
+// ---------------------------------------------------------------------------
+
+type TagOf<E> = E extends { readonly _tag: infer Tag extends string } ? Tag : never;
+type ByTag<E, Tag extends string> = Extract<E, { readonly _tag: Tag }>;
+
+/** One optional handler per tag, plus an optional `_` fallback. */
+export type ErrorHandlers<E extends TaggedError> = {
+  readonly [Tag in TagOf<E>]?: (error: ByTag<E, Tag>) => unknown;
+} & {
+  readonly _?: (error: E) => unknown;
+};
+
+/** Resolves to `unknown` when `H` is exhaustive, otherwise names the handlers that are missing. */
+type MissingHandlers<E extends TaggedError, H> = '_' extends keyof H
+  ? unknown
+  : [Exclude<TagOf<E>, keyof H>] extends [never]
+    ? unknown
+    : {
+        readonly [Tag in Exclude<TagOf<E>, keyof H>]: (error: ByTag<E, Tag>) => unknown;
+      };
+
+/** Union of the return types of the handlers in `H`. */
+export type HandlerResult<H> = {
+  [K in keyof H]: H[K] extends (...args: never[]) => infer R ? R : never;
+}[keyof H];
+
+/**
+ * Dispatch on `error._tag`. Either handle every tag of `E` or provide a `_` fallback;
+ * forgetting one is a compile error. Returns whatever the chosen handler returns.
+ *
+ * @example
+ * ```ts
+ * const { error } = await api.getUser({ params: { id } });
+ * if (error) {
+ *   return matchError(error, {
+ *     ApiError: (e) => (e.status === 404 ? 'Not found' : `Server said ${e.status}`),
+ *     NotFoundError: (e) => `No user ${e.id}`, // a custom error declared on the route
+ *     _: (e) => e.message,
+ *   });
+ * }
+ * ```
+ */
+export function matchError<E extends TaggedError, const H extends ErrorHandlers<E>>(
+  error: E,
+  handlers: H & NoInfer<MissingHandlers<E, H>>,
+): HandlerResult<H> {
+  const table = handlers as Record<string, ((error: E) => unknown) | undefined>;
+  const handler = table[error._tag] ?? table['_'];
+  if (!handler) {
+    throw error;
+  }
+  return handler(error) as HandlerResult<H>;
+}
+
+// ---------------------------------------------------------------------------
+// Internals
+// ---------------------------------------------------------------------------
+
+function isTaggedError(value: unknown): value is TaggedError {
+  return value instanceof TaggedError;
 }
 
 function isAbort(error: unknown): boolean {

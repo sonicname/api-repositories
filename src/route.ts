@@ -1,8 +1,8 @@
 import type { HttpMethod, ResponseType } from './adapters/types.js';
+import type { RouteError, TaggedError } from './errors.js';
 import type { CacheOptions } from './middleware/cache.js';
 import type { RetryOptions } from './middleware/retry.js';
 import type { Middleware } from './middleware/types.js';
-import type { Result } from './result.js';
 import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 
 /** A schema slot: either a Standard Schema or nothing. */
@@ -80,6 +80,41 @@ type CheckParamKeys<
   : MissingParamsError<TPath, Exclude<PathParamNames<TPath>, Required>>;
 
 // ---------------------------------------------------------------------------
+// Custom errors
+// ---------------------------------------------------------------------------
+
+/** What an error factory receives: the failed response plus the route name. */
+export interface ErrorContext {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  /** Parsed response body. */
+  data: unknown;
+  route: string;
+}
+
+/** Builds a custom error for a status code. Must return a {@link TaggedError}. */
+export type ErrorFactory = (context: ErrorContext) => TaggedError;
+
+/** Custom errors keyed by HTTP status. The factory's return type becomes part of `error`'s type. */
+export type ErrorFactories = Readonly<Record<number, ErrorFactory>>;
+
+/** Everything the `errors` field accepts. */
+export type ErrorsSpec = ErrorFactories | undefined;
+
+/**
+ * Union of the errors produced by an {@link ErrorFactories} map, or `never` when the
+ * slot is empty or unconstrained (see {@link SchemaOf} for why the latter matters).
+ */
+export type InferErrors<E> = [NonNullable<E>] extends [never]
+  ? never
+  : ErrorFactories extends NonNullable<E>
+    ? never
+    : NonNullable<E>[keyof NonNullable<E>] extends (...args: never[]) => infer R
+      ? Extract<R, TaggedError>
+      : never;
+
+// ---------------------------------------------------------------------------
 // Route definition
 // ---------------------------------------------------------------------------
 
@@ -92,6 +127,7 @@ type CheckParamKeys<
  * @typeParam TBody - Schema for the request body.
  * @typeParam TResponse - Schema for the response body. Its output type is what the caller receives.
  * @typeParam TResponseType - How the adapter should parse the response body.
+ * @typeParam TErrors - Custom errors by status. Their types join the `error` union.
  */
 export interface RouteDefinition<
   TPath extends string = string,
@@ -100,6 +136,7 @@ export interface RouteDefinition<
   TBody extends SchemaOrUndefined = SchemaOrUndefined,
   TResponse extends SchemaOrUndefined = SchemaOrUndefined,
   TResponseType extends ResponseType = ResponseType,
+  TErrors extends ErrorsSpec = ErrorsSpec,
 > {
   method: HttpMethod;
   /** Path relative to the repository `baseUrl`. Use `:name` segments for path params. */
@@ -118,6 +155,12 @@ export interface RouteDefinition<
   response?: TResponse;
   /** Response parsing strategy, defaults to `"json"`. */
   responseType?: TResponseType;
+  /**
+   * Custom errors by HTTP status, e.g. `{ 404: (ctx) => new NotFoundError(ctx.data) }`.
+   * A matching status produces that error instead of an `ApiError`. Route factories
+   * take precedence over repository ones.
+   */
+  errors?: TErrors;
   /** Static headers sent with every call of this route. */
   headers?: Record<string, string>;
   /** Adapter specific options (axios config, ofetch options, RequestInit...). */
@@ -142,7 +185,7 @@ export type RouteMap = Record<string, AnyRoute>;
 
 /**
  * Declare an endpoint. The returned object is the same you pass in, but with all
- * literal types preserved so the repository can infer inputs and outputs.
+ * literal types preserved so the repository can infer inputs, outputs and errors.
  * `params` is checked against the `:param` segments of `path` at compile time.
  *
  * @example
@@ -152,6 +195,7 @@ export type RouteMap = Record<string, AnyRoute>;
  *   path: '/repos/:owner/:repo/issues/:number',
  *   params: { number: z.coerce.number().int() }, // owner and repo accept string | number
  *   response: z.object({ id: z.number(), title: z.string() }),
+ *   errors: { 404: (ctx) => new IssueNotFound(ctx) },
  * });
  * ```
  */
@@ -162,11 +206,14 @@ export function createRoute<
   TBody extends SchemaOrUndefined = undefined,
   TResponse extends SchemaOrUndefined = undefined,
   TResponseType extends ResponseType = 'json',
+  // Defaults to the wide spec (not `undefined`) so factories get a contextual type for `ctx`
+  // before TErrors is inferred; InferErrors treats the wide spec as "no custom errors".
+  TErrors extends ErrorsSpec = ErrorsSpec,
 >(
-  definition: RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType> & {
+  definition: RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType, TErrors> & {
     params?: NoInfer<ValidateParams<TPath, TParams>>;
   },
-): RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType> {
+): RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType, TErrors> {
   return definition;
 }
 
@@ -178,8 +225,9 @@ export type RouteOptions<
   TBody extends SchemaOrUndefined,
   TResponse extends SchemaOrUndefined,
   TResponseType extends ResponseType,
+  TErrors extends ErrorsSpec,
 > = Omit<
-  RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType>,
+  RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType, TErrors>,
   'method' | 'path'
 >;
 
@@ -191,12 +239,15 @@ export type MethodRouteFactory = <
   TBody extends SchemaOrUndefined = undefined,
   TResponse extends SchemaOrUndefined = undefined,
   TResponseType extends ResponseType = 'json',
+  // Defaults to the wide spec (not `undefined`) so factories get a contextual type for `ctx`
+  // before TErrors is inferred; InferErrors treats the wide spec as "no custom errors".
+  TErrors extends ErrorsSpec = ErrorsSpec,
 >(
   path: TPath,
-  options?: RouteOptions<TPath, TParams, TQuery, TBody, TResponse, TResponseType> & {
+  options?: RouteOptions<TPath, TParams, TQuery, TBody, TResponse, TResponseType, TErrors> & {
     params?: NoInfer<ValidateParams<TPath, TParams>>;
   },
-) => RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType>;
+) => RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType, TErrors>;
 
 function methodFactory(method: HttpMethod): MethodRouteFactory {
   return (path, options) => ({ ...options, method, path });
@@ -331,28 +382,47 @@ type ParsedBody<R extends AnyRoute> =
           ? undefined
           : unknown;
 
-/** What a route caller resolves with: the response schema output, or the raw parsed body. */
+/** What a successful call resolves with: the response schema output, or the raw parsed body. */
 export type RouteOutput<R extends AnyRoute> = OutputOf<R['response'], ParsedBody<R>>;
 
-/** Full response returned by `caller.raw()`. */
-export interface RouteResponse<TData> {
-  data: TData;
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-}
+/** Custom errors declared on the route itself. */
+export type RouteErrors<R extends AnyRoute> = InferErrors<R['errors']>;
+
+/**
+ * Everything a call of `R` can fail with: the built-in {@link RouteError}s, the route's
+ * own custom errors and the repository's (`TRepoErrors`).
+ */
+export type RouteFailure<R extends AnyRoute, TRepoErrors = never> =
+  RouteError | RouteErrors<R> | TRepoErrors;
+
+/**
+ * What a route call resolves with. Exactly one of `data` and `error` is `null`, so
+ * `if (error)` narrows `data` and vice versa. `ok` is there for `if (result.ok)`.
+ */
+export type RouteResult<TData, TError> =
+  | {
+      readonly ok: true;
+      readonly data: TData;
+      readonly error: null;
+      readonly status: number;
+      readonly statusText: string;
+      readonly headers: Record<string, string>;
+    }
+  | {
+      readonly ok: false;
+      readonly data: null;
+      readonly error: TError;
+    };
 
 /** Callable produced for each route of a built repository. */
-export interface RouteCaller<R extends AnyRoute> {
-  /** Perform the request and resolve with the (validated) response body. */
-  (...args: RouteArgs<R>): Promise<RouteOutput<R>>;
-  /** Perform the request and resolve with status, headers and body. */
-  raw(...args: RouteArgs<R>): Promise<RouteResponse<RouteOutput<R>>>;
+export interface RouteCaller<R extends AnyRoute, TRepoErrors = never> {
   /**
-   * Perform the request and resolve with a Go-style `[error, data]` tuple instead of
-   * rejecting. `error` is a {@link RouteError} or `null`.
+   * Perform the request. Never rejects: resolves with `{ data, error }` where `error`
+   * is typed with every failure this route can produce.
    */
-  safe(...args: RouteArgs<R>): Promise<Result<RouteOutput<R>>>;
+  (...args: RouteArgs<R>): Promise<RouteResult<RouteOutput<R>, RouteFailure<R, TRepoErrors>>>;
+  /** Perform the request and resolve with the data, rejecting with the error instead. */
+  orThrow(...args: RouteArgs<R>): Promise<RouteOutput<R>>;
   /** The route definition this caller was built from. */
   readonly definition: R;
 }

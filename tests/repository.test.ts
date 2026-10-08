@@ -59,7 +59,7 @@ describe('createRepository', () => {
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getUser, listRepos }).build();
 
     expect(typeof api.getUser).toBe('function');
-    expect(typeof api.getUser.raw).toBe('function');
+    expect(typeof api.getUser.orThrow).toBe('function');
     expect(api.getUser.definition).toBe(getUser);
     expect(api.$routes).toEqual({ getUser, listRepos });
     expect(api.$config.baseUrl).toBe(BASE);
@@ -78,7 +78,7 @@ describe('createRepository', () => {
     const fetchMock = mockFetch(jsonResponse({ id: 1, login: 'octocat', extra: true }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getUser }).build();
 
-    const user = await api.getUser({ params: { username: 'octo cat' } });
+    const user = await api.getUser.orThrow({ params: { username: 'octo cat' } });
 
     expect(user).toEqual({ id: 1, login: 'octocat' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -91,7 +91,10 @@ describe('createRepository', () => {
     const fetchMock = mockFetch(jsonResponse([{ name: 'repo' }]));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ listRepos }).build();
 
-    await api.listRepos({ params: { username: 'octocat' }, query: { page: 2, sort: undefined } });
+    await api.listRepos.orThrow({
+      params: { username: 'octocat' },
+      query: { page: 2, sort: undefined },
+    });
 
     expect(fetchMock.mock.calls[0]![0]).toBe(`${BASE}/users/octocat/repos?page=2`);
   });
@@ -100,7 +103,7 @@ describe('createRepository', () => {
     const fetchMock = mockFetch(jsonResponse({ number: 7 }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ createIssue }).build();
 
-    const issue = await api.createIssue({
+    const issue = await api.createIssue.orThrow({
       params: { owner: 'me', repo: 'proj' },
       body: { title: 'Bug' },
     });
@@ -127,7 +130,7 @@ describe('createRepository', () => {
       .mergeAll({ route })
       .build();
 
-    await api.route({ params: { username: 'a' }, headers: { 'x-call': 'call' } });
+    await api.route.orThrow({ params: { username: 'a' }, headers: { 'x-call': 'call' } });
 
     expect(fetchMock.mock.calls[0]![1].headers).toEqual({
       authorization: 'Bearer token',
@@ -141,14 +144,15 @@ describe('createRepository', () => {
     mockFetch(new Response('pong', { status: 200 }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ ping }).build();
 
-    await expect(api.ping()).resolves.toBe('pong');
+    await expect(api.ping.orThrow()).resolves.toBe('pong');
   });
 
   it('exposes status and headers through raw()', async () => {
     mockFetch(jsonResponse({ id: 1, login: 'x' }, { status: 201, headers: { 'x-id': '42' } }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getUser }).build();
 
-    const response = await api.getUser.raw({ params: { username: 'x' } });
+    const response = await api.getUser({ params: { username: 'x' } });
+    if (!response.ok) throw response.error;
 
     expect(response.status).toBe(201);
     expect(response.headers['x-id']).toBe('42');
@@ -159,7 +163,10 @@ describe('createRepository', () => {
     const fetchMock = mockFetch(jsonResponse({}));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ createIssue }).build();
 
-    const promise = api.createIssue({ params: { owner: '', repo: 'x' }, body: { title: 't' } });
+    const promise = api.createIssue.orThrow({
+      params: { owner: '', repo: 'x' },
+      body: { title: 't' },
+    });
 
     await expect(promise).rejects.toBeInstanceOf(ValidationError);
     await expect(promise).rejects.toMatchObject({ target: 'params', route: 'createIssue' });
@@ -170,7 +177,7 @@ describe('createRepository', () => {
     mockFetch(jsonResponse({ id: 'not-a-number', login: 'x' }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getUser }).build();
 
-    const promise = api.getUser({ params: { username: 'x' } });
+    const promise = api.getUser.orThrow({ params: { username: 'x' } });
 
     await expect(promise).rejects.toBeInstanceOf(ValidationError);
     await expect(promise).rejects.toMatchObject({ target: 'response' });
@@ -182,14 +189,16 @@ describe('createRepository', () => {
       .mergeAll({ getUser })
       .build();
 
-    await expect(api.getUser({ params: { username: 'x' } })).resolves.toEqual({ id: 'oops' });
+    await expect(api.getUser.orThrow({ params: { username: 'x' } })).resolves.toEqual({
+      id: 'oops',
+    });
   });
 
   it('throws ApiError on non-2xx status with the parsed body', async () => {
     mockFetch(jsonResponse({ message: 'Not Found' }, { status: 404, statusText: 'Not Found' }));
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getUser }).build();
 
-    const promise = api.getUser({ params: { username: 'nobody' } });
+    const promise = api.getUser.orThrow({ params: { username: 'nobody' } });
 
     await expect(promise).rejects.toBeInstanceOf(ApiError);
     await expect(promise).rejects.toMatchObject({
@@ -205,7 +214,7 @@ describe('createRepository', () => {
       .mergeAll({ getUser })
       .build();
 
-    await expect(api.getUser({ params: { username: 'x' } })).resolves.toEqual({
+    await expect(api.getUser.orThrow({ params: { username: 'x' } })).resolves.toEqual({
       id: 1,
       login: 'x',
     });
@@ -232,7 +241,9 @@ describe('createRepository', () => {
       .mergeAll({ getUser })
       .build();
 
-    await expect(api.getUser({ params: { username: 'x' } })).rejects.toBeInstanceOf(ApiError);
+    await expect(api.getUser.orThrow({ params: { username: 'x' } })).rejects.toBeInstanceOf(
+      ApiError,
+    );
     expect(calls).toEqual(['request:getUser', 'response:500', 'error:ApiError']);
   });
 
@@ -259,7 +270,7 @@ describe('createRepository', () => {
       .mergeAll({ route })
       .build();
 
-    await api.route({ params: { username: 'x' }, options: { call: true, shared: 'call' } });
+    await api.route.orThrow({ params: { username: 'x' }, options: { call: true, shared: 'call' } });
 
     expect(seen[0]!.options).toEqual({ repo: true, route: true, call: true, shared: 'call' });
     expect(seen[0]!.url).toBe(`${BASE}/users/x`);
@@ -270,7 +281,7 @@ describe('createRepository', () => {
     const api = createRepository({ baseUrl: BASE }).mergeAll({ ping }).build();
     const controller = new AbortController();
 
-    await api.ping({ signal: controller.signal });
+    await api.ping.orThrow({ signal: controller.signal });
 
     expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal);
   });

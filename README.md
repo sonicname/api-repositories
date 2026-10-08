@@ -16,9 +16,9 @@ Declare your backend endpoints once, get a fully typed API client.
   own in a few lines.
 - **Validated at runtime**: bad inputs are rejected before the request is sent, unexpected
   responses throw a `ValidationError`, non-2xx statuses throw an `ApiError`.
-- **Errors you can reason about**: every failure is a tagged `RouteError`. Use `caller.safe()`
-  for a Go-style `[error, data]` tuple, or `matchError` / `catchTag` for typed, exhaustive
-  handling by tag.
+- **No try/catch needed**: every call resolves with `{ data, error }`. `error` is a tagged
+  union of the built-in errors plus the custom ones you declare per route or repository, so
+  `matchError` can be exhaustive. `orThrow()` is there when you do want a rejection.
 - **Resilient**: per-attempt timeout, retry with exponential backoff and `Retry-After`, and an
   opt-in cache with TTL, request deduplication and tag invalidation. All configurable per
   repository, per route and per call.
@@ -71,13 +71,18 @@ const github = createRepository({
   .build();
 
 // Everything below is fully typed and autocompleted.
-const user = await github.getUser({ params: { username: 'octocat' } });
-//    ^? { id: number; login: string }
+const { data: user, error } = await github.getUser({ params: { username: 'octocat' } });
+if (error) {
+  //  ^? RouteError (ApiError | ValidationError | TimeoutError | AbortError | NetworkError | UnknownError)
+  console.error(error.message);
+} else {
+  user.login; // user: { id: number; login: string }
+}
 
-const repos = await github.listRepos({
+const repos = await github.listRepos.orThrow({
   params: { username: 'octocat' },
   query: { sort: 'updated' },
-});
+}); // rejects instead of returning { error }
 
 const issue = await github.createIssue({
   params: { owner: 'octocat', repo: 'hello-world' },
@@ -189,11 +194,17 @@ await github.getUser({
 
 When nothing is required, the argument can be omitted entirely: `await api.ping()`.
 
-Use `.raw()` to also get status and headers:
+Each call resolves with a result object and never rejects:
 
 ```ts
-const { data, status, headers } = await github.getUser.raw({ params: { username: 'octocat' } });
+const result = await github.getUser({ params: { username: 'octocat' } });
+// { ok: true,  data, error: null, status, statusText, headers }
+// { ok: false, data: null, error }
 ```
+
+`data` and `error` are mutually exclusive, so `if (error)` narrows `data` and `if (result.ok)`
+narrows everything. Use `caller.orThrow(input)` to get the data directly and a rejection on
+failure.
 
 `client.$routes` holds the definitions and `client.$config` the resolved configuration.
 
@@ -333,89 +344,94 @@ non-2xx statuses; the repository decides what counts as a failure.
 
 ## Errors
 
-Every rejection from a route call is a `RouteError`: one of six classes sharing a `_tag`
-discriminant and extending `TaggedError`.
+`error` is always a `TaggedError`: an `Error` with a literal `_tag` to discriminate on. The
+built-in ones form the `RouteError` union:
 
-| Class             | `_tag`              | When                                                                       |
-| ----------------- | ------------------- | -------------------------------------------------------------------------- |
-| `ApiError`        | `'ApiError'`        | Non-success status. Has `status`, `data`, `headers`.                       |
-| `ValidationError` | `'ValidationError'` | Params, query, body or response failed its schema. Has `target`, `issues`. |
-| `TimeoutError`    | `'TimeoutError'`    | The per-attempt timeout fired. Has `timeout`.                              |
-| `AbortError`      | `'AbortError'`      | The caller's `signal` aborted. `cause` is the reason.                      |
-| `NetworkError`    | `'NetworkError'`    | The transport could not reach the server. `cause` is the raw error.        |
-| `UnknownError`    | `'UnknownError'`    | Anything else thrown (a middleware bug...). `cause` is the raw value.      |
+| Class             | `_tag`              | When                                                                               |
+| ----------------- | ------------------- | ---------------------------------------------------------------------------------- |
+| `ApiError`        | `'ApiError'`        | Non-success status with no custom error declared. Has `status`, `data`, `headers`. |
+| `ValidationError` | `'ValidationError'` | Params, query, body or response failed its schema. Has `target`, `issues`.         |
+| `TimeoutError`    | `'TimeoutError'`    | The per-attempt timeout fired. Has `timeout`.                                      |
+| `AbortError`      | `'AbortError'`      | The caller's `signal` aborted. `cause` is the reason.                              |
+| `NetworkError`    | `'NetworkError'`    | The transport could not reach the server. `cause` is the raw error.                |
+| `UnknownError`    | `'UnknownError'`    | Anything else thrown (a middleware bug...). `cause` is the raw value.              |
 
-Every error also carries `route`, the name of the route that was called. Errors thrown by your
-own middlewares that extend `TaggedError` pass through untouched, so you can add tags of your own.
+Every error carries `route`, the name of the route that was called.
 
-### Go style: `caller.safe()`
+### Custom errors
 
-`safe()` never rejects. It resolves with an `[error, data]` tuple where exactly one side is
-`null`, so a truthiness check on `error` narrows `data`.
+Declare your own errors by HTTP status on a route or on the repository. The factory receives the
+failed response and the type it returns joins the `error` union of every affected caller.
 
 ```ts
-const [error, user] = await github.getUser.safe({ params: { username: 'octocat' } });
-if (error) {
-  // error: RouteError, user: null
-  return showToast(error.message);
+import { TaggedError } from 'endpoint-kit';
+
+class NotFoundError extends TaggedError<'NotFoundError'> {
+  readonly _tag = 'NotFoundError';
+  constructor(readonly resource: string) {
+    super(`${resource} not found`);
+  }
 }
-user.login; // user: { id: number; login: string }
+
+class UnauthorizedError extends TaggedError<'UnauthorizedError'> {
+  readonly _tag = 'UnauthorizedError';
+}
+
+const getRepo = createRoute.get('/repos/:owner/:repo', {
+  response: repoSchema,
+  errors: { 404: (ctx) => new NotFoundError(`repo ${ctx.data.name}`) },
+});
+
+const github = createRepository({
+  baseUrl,
+  errors: { 401: () => new UnauthorizedError('Sign in first') }, // applies to every route
+})
+  .mergeAll({ getRepo })
+  .build();
+
+const { error } = await github.getRepo({ params: { owner: 'octocat', repo: 'x' } });
+//      ^? RouteError | NotFoundError | UnauthorizedError | null
 ```
 
-`toResult(promise, routeName?)` does the same for any promise, and `ok()` / `err()` build
-results by hand.
+Route factories take precedence over repository ones. Any other failing status is an `ApiError`.
+The factory context has `status`, `statusText`, `headers`, `data` (parsed body) and `route`.
+Tagged errors thrown from your own middlewares pass through untouched as well.
 
-### Tag based: `matchError`, `catchTag`, `catchTags`
+### Handling errors
 
-`matchError` dispatches on `_tag` with one typed handler per tag. Provide every tag or a `_`
-fallback; forgetting one is a compile error. It returns whatever the chosen handler returns.
+Narrow on `_tag` directly, or use `matchError` for an exhaustive switch. Handlers are typed per
+tag and you must cover every tag or provide a `_` fallback.
 
 ```ts
 import { matchError } from 'endpoint-kit';
 
-const message = matchError(error, {
-  ApiError: (e) => (e.status === 404 ? 'Not found' : `Server said ${e.status}`),
-  ValidationError: (e) => e.issues.map((issue) => issue.message).join(', '),
-  TimeoutError: () => 'Still loading, hang on',
-  _: (e) => e.message,
-});
-```
+const { data, error } = await github.getRepo({ params: { owner, repo } });
+if (error) {
+  if (error._tag === 'NotFoundError') return showEmptyState(error.resource);
 
-`catchTag` and `catchTags` recover from specific tags on a promise and rethrow the rest.
-
-```ts
-import { catchTag, catchTags } from 'endpoint-kit';
-
-const user = await catchTag(github.getUser({ params: { username } }), 'ApiError', (e) =>
-  e.status === 404 ? null : Promise.reject(e),
-);
-
-const repos = await catchTags(github.listRepos({ params: { username } }), {
-  TimeoutError: () => cachedRepos,
-  NetworkError: () => [],
-});
-```
-
-`hasTag(error, 'ApiError')` is the plain type guard, and `toRouteError(unknown, route)` is the
-normaliser the library applies to everything it throws.
-
-### try/catch still works
-
-```ts
-try {
-  await github.getUser({ params: { username: 'nobody' } });
-} catch (error) {
-  if (error instanceof ApiError) error.status; // 404
+  return showToast(
+    matchError(error, {
+      UnauthorizedError: () => 'Please sign in',
+      ApiError: (e) => `Server said ${e.status}`,
+      TimeoutError: () => 'Still loading, hang on',
+      _: (e) => e.message,
+    }),
+  );
 }
+data.name;
 ```
+
+`RouteFailure<typeof getRepo>` names the error union of a route, and `toRouteError(unknown, route)`
+is the normaliser the library applies to everything thrown during a call.
 
 ## Type helpers
 
 ```ts
-import type { RouteInput, RouteOutput } from 'endpoint-kit';
+import type { RouteFailure, RouteInput, RouteOutput } from 'endpoint-kit';
 
 type GetUserInput = RouteInput<typeof getUser>;
 type GetUserOutput = RouteOutput<typeof getUser>;
+type GetUserError = RouteFailure<typeof getUser>;
 ```
 
 ## Development

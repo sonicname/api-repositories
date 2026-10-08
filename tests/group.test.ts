@@ -58,7 +58,7 @@ describe('groupRoutes', () => {
     });
     const api = createRepository({ baseUrl: 'https://a.com', adapter }).mergeAll(org).build();
 
-    await api.getRepo({ params: { org: 'acme', repo: 'web' } });
+    await api.getRepo.orThrow({ params: { org: 'acme', repo: 'web' } });
 
     expect(adapter.calls[0]!.url).toBe('https://a.com/orgs/acme/repos/web');
   });
@@ -122,12 +122,12 @@ describe('groupRoutes', () => {
       .mergeAll(groupRoutes('/admin', { getUser: createRoute.get('/users/:id') }))
       .build();
 
-    await api.getUser({ params: { id: 7 } });
+    await api.getUser.orThrow({ params: { id: 7 } });
 
     expect(adapter.calls[0]!.url).toBe('https://a.com/admin/users/7');
     const typeOnly = () => {
       // @ts-expect-error id is required
-      void api.getUser();
+      void api.getUser.orThrow();
     };
     expectTypeOf(typeOnly).toBeFunction();
   });

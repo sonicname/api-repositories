@@ -1,7 +1,7 @@
 import { fetchAdapter } from './adapters/fetch.js';
 import type { Adapter, AdapterRequest, AdapterResponse } from './adapters/types.js';
 import { ApiError, toRouteError, ValidationError } from './errors.js';
-import type { RouteError, ValidationTarget } from './errors.js';
+import type { RouteError, TaggedError, ValidationTarget } from './errors.js';
 import { cacheMiddleware, createCacheController } from './middleware/cache.js';
 import type { CacheController, CacheOptions, CacheStorage } from './middleware/cache.js';
 import { retryMiddleware } from './middleware/retry.js';
@@ -12,16 +12,18 @@ import type { Middleware, MiddlewareContext } from './middleware/types.js';
 import { resolvePolicy, resolveTimeout } from './policy.js';
 import type {
   AnyRoute,
+  ErrorFactory,
+  ErrorsSpec,
+  InferErrors,
   ParamsSpec,
   RouteArgs,
   RouteCaller,
+  RouteFailure,
   RouteMap,
   RouteOutput,
-  RouteResponse,
+  RouteResult,
   Simplify,
 } from './route.js';
-import type { Result } from './result.js';
-import { toResult } from './result.js';
 import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 import { buildUrl } from './url.js';
 
@@ -48,7 +50,7 @@ export interface RepositoryHooks {
   onError?: (context: {
     route: string;
     request: AdapterRequest | undefined;
-    error: RouteError;
+    error: TaggedError;
   }) => void | Promise<void>;
 }
 
@@ -58,8 +60,13 @@ export interface RepositoryCacheOptions extends CacheOptions {
   storage?: CacheStorage;
 }
 
-/** Configuration shared by all routes of a repository. */
-export interface RepositoryConfig {
+/**
+ * Configuration shared by all routes of a repository.
+ *
+ * @typeParam TErrors - Custom errors by status shared by every route. Their types join
+ * the `error` union of every caller.
+ */
+export interface RepositoryConfig<TErrors extends ErrorsSpec = ErrorsSpec> {
   /** Base URL prepended to every route path. */
   baseUrl: string;
   /** Transport. Defaults to {@link fetchAdapter}. */
@@ -72,6 +79,11 @@ export interface RepositoryConfig {
   validateResponse?: boolean;
   /** Decide whether a status code is a success. Defaults to `200 <= status < 300`. */
   isSuccess?: (status: number) => boolean;
+  /**
+   * Custom errors by HTTP status for every route, e.g.
+   * `{ 401: () => new UnauthorizedError() }`. Route-level `errors` take precedence.
+   */
+  errors?: TErrors;
   hooks?: RepositoryHooks;
   /** Middlewares run around every request, outermost first. */
   middlewares?: readonly Middleware[];
@@ -84,8 +96,8 @@ export interface RepositoryConfig {
 }
 
 /** The object returned by `build()`: one caller per route plus a few `$`-prefixed extras. */
-export type RepositoryClient<TRoutes extends RouteMap> = {
-  readonly [K in keyof TRoutes]: RouteCaller<TRoutes[K]>;
+export type RepositoryClient<TRoutes extends RouteMap, TRepoErrors = never> = {
+  readonly [K in keyof TRoutes]: RouteCaller<TRoutes[K], TRepoErrors>;
 } & {
   /** Resolved configuration this client was built with. */
   readonly $config: Readonly<RepositoryConfig>;
@@ -96,7 +108,10 @@ export type RepositoryClient<TRoutes extends RouteMap> = {
 };
 
 /** Fluent builder returned by {@link createRepository}. */
-export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> {
+export class RepositoryBuilder<
+  TRoutes extends RouteMap = Record<never, never>,
+  TRepoErrors = never,
+> {
   readonly #config: RepositoryConfig;
   readonly #routes: TRoutes;
 
@@ -109,7 +124,7 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
   addRoute<TName extends string, TRoute extends AnyRoute>(
     name: TName,
     route: TRoute,
-  ): RepositoryBuilder<Simplify<TRoutes & { [K in TName]: TRoute }>> {
+  ): RepositoryBuilder<Simplify<TRoutes & { [K in TName]: TRoute }>, TRepoErrors> {
     return new RepositoryBuilder(this.#config, {
       ...this.#routes,
       [name]: route,
@@ -117,7 +132,9 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
   }
 
   /** Register several routes at once, keyed by the object's property names. */
-  mergeAll<TMore extends RouteMap>(routes: TMore): RepositoryBuilder<Simplify<TRoutes & TMore>> {
+  mergeAll<TMore extends RouteMap>(
+    routes: TMore,
+  ): RepositoryBuilder<Simplify<TRoutes & TMore>, TRepoErrors> {
     return new RepositoryBuilder(this.#config, {
       ...this.#routes,
       ...routes,
@@ -125,7 +142,7 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
   }
 
   /** Produce the typed client. */
-  build(): RepositoryClient<TRoutes> {
+  build(): RepositoryClient<TRoutes, TRepoErrors> {
     const config: RepositoryConfig = {
       ...this.#config,
       adapter: this.#config.adapter ?? fetchAdapter(),
@@ -149,7 +166,7 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
       client[name] = createCaller(name, route, runtime);
     }
 
-    return client as RepositoryClient<TRoutes>;
+    return client as RepositoryClient<TRoutes, TRepoErrors>;
   }
 }
 
@@ -158,15 +175,22 @@ export class RepositoryBuilder<TRoutes extends RouteMap = Record<never, never>> 
  *
  * @example
  * ```ts
- * const github = createRepository({ baseUrl: 'https://api.github.com', timeout: 10_000, retry: 3 })
+ * const github = createRepository({
+ *   baseUrl: 'https://api.github.com',
+ *   timeout: 10_000,
+ *   retry: 3,
+ *   errors: { 401: () => new UnauthorizedError() },
+ * })
  *   .mergeAll({ getUser, listRepos })
  *   .build();
  *
- * const user = await github.getUser({ params: { username: 'octocat' } });
+ * const { data, error } = await github.getUser({ params: { username: 'octocat' } });
  * ```
  */
-export function createRepository(config: RepositoryConfig): RepositoryBuilder {
-  return new RepositoryBuilder(config, {});
+export function createRepository<TErrors extends ErrorsSpec = ErrorsSpec>(
+  config: RepositoryConfig<TErrors>,
+): RepositoryBuilder<Record<never, never>, InferErrors<TErrors>> {
+  return new RepositoryBuilder<Record<never, never>, InferErrors<TErrors>>(config, {});
 }
 
 // ---------------------------------------------------------------------------
@@ -180,23 +204,36 @@ interface Runtime {
   isSuccess: (status: number) => boolean;
 }
 
+interface Executed {
+  data: unknown;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+}
+
 function createCaller<R extends AnyRoute>(
   name: string,
   route: R,
   runtime: Runtime,
 ): RouteCaller<R> {
-  const raw = (...args: RouteArgs<R>): Promise<RouteResponse<RouteOutput<R>>> =>
-    execute(name, route, runtime, (args[0] ?? {}) as unknown as LooseInput) as Promise<
-      RouteResponse<RouteOutput<R>>
-    >;
+  const run = (args: RouteArgs<R>): Promise<Executed> =>
+    execute(name, route, runtime, (args[0] ?? {}) as unknown as LooseInput);
 
-  const caller = (...args: RouteArgs<R>): Promise<RouteOutput<R>> =>
-    raw(...args).then((response) => response.data);
+  const caller = async (
+    ...args: RouteArgs<R>
+  ): Promise<RouteResult<RouteOutput<R>, RouteFailure<R>>> => {
+    try {
+      const { data, status, statusText, headers } = await run(args);
+      return { ok: true, data: data as RouteOutput<R>, error: null, status, statusText, headers };
+    } catch (error) {
+      return { ok: false, data: null, error: error as RouteFailure<R> };
+    }
+  };
 
-  const safe = (...args: RouteArgs<R>): Promise<Result<RouteOutput<R>>> =>
-    toResult(caller(...args), name);
+  const orThrow = (...args: RouteArgs<R>): Promise<RouteOutput<R>> =>
+    run(args).then((response) => response.data as RouteOutput<R>);
 
-  return Object.assign(caller, { raw, safe, definition: route });
+  return Object.assign(caller, { orThrow, definition: route });
 }
 
 interface LooseInput {
@@ -216,7 +253,7 @@ async function execute(
   route: AnyRoute,
   runtime: Runtime,
   input: LooseInput,
-): Promise<RouteResponse<unknown>> {
+): Promise<Executed> {
   const { config } = runtime;
   const hooks = config.hooks ?? {};
   let request: AdapterRequest | undefined;
@@ -242,13 +279,7 @@ async function execute(
     const response = await buildPipeline(name, route, runtime, input)(request);
 
     if (!runtime.isSuccess(response.status)) {
-      throw new ApiError(
-        response.status,
-        response.data,
-        name,
-        response.headers,
-        response.statusText,
-      );
+      throw failureFor(name, route, config, response);
     }
 
     const data =
@@ -269,6 +300,27 @@ async function execute(
     await hooks.onError?.({ route: name, request, error });
     throw error;
   }
+}
+
+/** A custom error from the route or repository `errors` map, or an {@link ApiError}. */
+function failureFor(
+  name: string,
+  route: AnyRoute,
+  config: RepositoryConfig,
+  response: AdapterResponse,
+): TaggedError {
+  const factory: ErrorFactory | undefined =
+    route.errors?.[response.status] ?? config.errors?.[response.status];
+  if (factory) {
+    return factory({
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      data: response.data,
+      route: name,
+    });
+  }
+  return new ApiError(response.status, response.data, name, response.headers, response.statusText);
 }
 
 /**
@@ -363,3 +415,6 @@ async function validateParams(
   }
   return result;
 }
+
+// Exported for documentation purposes: the error union a repository produces.
+export type { RouteError };

@@ -31,7 +31,7 @@ describe('params as a per-key schema map', () => {
     const fetchMock = mockFetch();
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getIssue }).build();
 
-    await api.getIssue({ params: { owner: 'Octo', repo: 'Hello-World', number: '42' } });
+    await api.getIssue.orThrow({ params: { owner: 'Octo', repo: 'Hello-World', number: '42' } });
 
     expect(fetchMock.mock.calls[0]![0]).toBe(`${BASE}/repos/Octo/hello-world/issues/42`);
   });
@@ -40,7 +40,7 @@ describe('params as a per-key schema map', () => {
     const fetchMock = mockFetch();
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getIssue }).build();
 
-    const promise = api.getIssue({ params: { owner: 'o', repo: 'r', number: 'NaN' } });
+    const promise = api.getIssue.orThrow({ params: { owner: 'o', repo: 'r', number: 'NaN' } });
 
     await expect(promise).rejects.toBeInstanceOf(ValidationError);
     await expect(promise).rejects.toMatchObject({
@@ -54,9 +54,9 @@ describe('params as a per-key schema map', () => {
     mockFetch();
     const api = createRepository({ baseUrl: BASE }).mergeAll({ getIssue }).build();
 
-    await expect(api.getIssue({ params: { repo: 'r', number: 1 } as never })).rejects.toThrow(
-      /Missing value for path param ":owner"/,
-    );
+    await expect(
+      api.getIssue.orThrow({ params: { repo: 'r', number: 1 } as never }),
+    ).rejects.toThrow(/Missing value for path param ":owner"/);
   });
 
   it('treats an empty map like no params', async () => {
@@ -64,7 +64,7 @@ describe('params as a per-key schema map', () => {
     const route = createRoute({ method: 'GET', path: '/u/:id', params: {} });
     const api = createRepository({ baseUrl: BASE }).mergeAll({ route }).build();
 
-    await api.route({ params: { id: 7 } });
+    await api.route.orThrow({ params: { id: 7 } });
 
     expect(fetchMock.mock.calls[0]![0]).toBe(`${BASE}/u/7`);
   });
@@ -80,7 +80,7 @@ describe('params as a whole-object schema', () => {
     });
     const api = createRepository({ baseUrl: BASE }).mergeAll({ route }).build();
 
-    await api.route({ params: { id: '  9 ' } });
+    await api.route.orThrow({ params: { id: '  9 ' } });
 
     expect(fetchMock.mock.calls[0]![0]).toBe(`${BASE}/u/9`);
   });

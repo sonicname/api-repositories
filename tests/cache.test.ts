@@ -42,13 +42,13 @@ describe('cache middleware', () => {
       .mergeAll({ getUser })
       .build();
 
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
-    await expect(api.getUser({ params: { id: 2 } })).resolves.toEqual({ n: 2 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
+    await expect(api.getUser.orThrow({ params: { id: 2 } })).resolves.toEqual({ n: 2 });
     expect(adapter.calls).toHaveLength(2);
 
     vi.advanceTimersByTime(1000);
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
   });
 
   it('deduplicates concurrent identical requests', async () => {
@@ -58,9 +58,9 @@ describe('cache middleware', () => {
       .build();
 
     const results = await Promise.all([
-      api.getUser({ params: { id: 1 } }),
-      api.getUser({ params: { id: 1 } }),
-      api.getUser({ params: { id: 1 } }),
+      api.getUser.orThrow({ params: { id: 1 } }),
+      api.getUser.orThrow({ params: { id: 1 } }),
+      api.getUser.orThrow({ params: { id: 1 } }),
     ]);
 
     expect(results).toEqual([{ n: 1 }, { n: 1 }, { n: 1 }]);
@@ -79,16 +79,16 @@ describe('cache middleware', () => {
       .mergeAll({ getUser, updateUser })
       .build();
 
-    await expect(api.getUser({ params: { id: 1 } })).rejects.toThrow();
-    await expect(api.getUser({ params: { id: 1 } })).rejects.toThrow();
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).rejects.toThrow();
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).rejects.toThrow();
     expect(failing.calls).toHaveLength(2);
 
     const ok = countingAdapter();
     const api2 = createRepository({ baseUrl: 'https://a.com', adapter: ok, cache: 1000 })
       .mergeAll({ updateUser })
       .build();
-    await api2.updateUser({ params: { id: 1 } });
-    await api2.updateUser({ params: { id: 1 } });
+    await api2.updateUser.orThrow({ params: { id: 1 } });
+    await api2.updateUser.orThrow({ params: { id: 1 } });
     expect(ok.calls).toHaveLength(2);
   });
 
@@ -98,9 +98,9 @@ describe('cache middleware', () => {
       .mergeAll({ getUser, updateUser })
       .build();
 
-    await api.getUser({ params: { id: 1 } });
-    await api.updateUser({ params: { id: 1 } });
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
+    await api.getUser.orThrow({ params: { id: 1 } });
+    await api.updateUser.orThrow({ params: { id: 1 } });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
   });
 
   it('exposes manual invalidation through $cache', async () => {
@@ -109,15 +109,15 @@ describe('cache middleware', () => {
       .mergeAll({ getUser })
       .build();
 
-    await api.getUser({ params: { id: 1 } });
+    await api.getUser.orThrow({ params: { id: 1 } });
     await api.$cache.invalidate('other');
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 1 });
     await api.$cache.invalidate('user');
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 2 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 2 });
     await api.$cache.clear();
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 3 });
     await api.$cache.delete('GET https://a.com/users/1');
-    await expect(api.getUser({ params: { id: 1 } })).resolves.toEqual({ n: 4 });
+    await expect(api.getUser.orThrow({ params: { id: 1 } })).resolves.toEqual({ n: 4 });
   });
 
   it('includes vary headers in the key and supports a custom key', async () => {
@@ -130,13 +130,13 @@ describe('cache middleware', () => {
       .mergeAll({ getUser })
       .build();
 
-    await api.getUser({ params: { id: 1 }, headers: { authorization: 'a' } });
-    await api.getUser({ params: { id: 1 }, headers: { authorization: 'b' } });
-    await api.getUser({ params: { id: 1 }, headers: { authorization: 'a' } });
+    await api.getUser.orThrow({ params: { id: 1 }, headers: { authorization: 'a' } });
+    await api.getUser.orThrow({ params: { id: 1 }, headers: { authorization: 'b' } });
+    await api.getUser.orThrow({ params: { id: 1 }, headers: { authorization: 'a' } });
     expect(adapter.calls).toHaveLength(2);
 
-    await api.getUser({ params: { id: 1 }, cache: { key: () => 'custom' } });
-    await api.getUser({ params: { id: 2 }, cache: { key: () => 'custom' } });
+    await api.getUser.orThrow({ params: { id: 1 }, cache: { key: () => 'custom' } });
+    await api.getUser.orThrow({ params: { id: 2 }, cache: { key: () => 'custom' } });
     expect(adapter.calls).toHaveLength(3);
   });
 
@@ -146,10 +146,10 @@ describe('cache middleware', () => {
       .mergeAll({ getUser, fresh: createRoute({ method: 'GET', path: '/fresh', cache: false }) })
       .build();
 
-    await api.getUser({ params: { id: 1 } });
-    await api.getUser({ params: { id: 1 }, cache: false });
-    await api.fresh();
-    await api.fresh();
+    await api.getUser.orThrow({ params: { id: 1 } });
+    await api.getUser.orThrow({ params: { id: 1 }, cache: false });
+    await api.fresh.orThrow();
+    await api.fresh.orThrow();
     expect(adapter.calls).toHaveLength(4);
   });
 
@@ -179,8 +179,8 @@ describe('cache middleware', () => {
       .mergeAll({ getUser })
       .build();
 
-    await api.getUser({ params: { id: 1 } });
-    await api.getUser({ params: { id: 1 } });
+    await api.getUser.orThrow({ params: { id: 1 } });
+    await api.getUser.orThrow({ params: { id: 1 } });
     expect(adapter.calls).toHaveLength(1);
     expect(entries.size).toBe(1);
     expect(api.$cache.storage).toBe(storage);

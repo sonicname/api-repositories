@@ -110,7 +110,7 @@ describe('timeout policy resolution', () => {
       .mergeAll({ route })
       .build();
 
-    const assertion = expect(api.route()).rejects.toBeInstanceOf(TimeoutError);
+    const assertion = expect(api.route.orThrow()).rejects.toBeInstanceOf(TimeoutError);
     await vi.advanceTimersByTimeAsync(50);
     await assertion;
     expect(errors[0]).toBeInstanceOf(TimeoutError);
@@ -125,11 +125,13 @@ describe('timeout policy resolution', () => {
       .mergeAll({ route: createRoute({ method: 'GET', path: '/x', timeout: false }) })
       .build();
 
-    const untouched = api.route();
+    const untouched = api.route.orThrow();
     await vi.advanceTimersByTimeAsync(200);
     await expect(untouched).resolves.toBe('ok');
 
-    const overridden = expect(api.route({ timeout: 20 })).rejects.toBeInstanceOf(TimeoutError);
+    const overridden = expect(api.route.orThrow({ timeout: 20 })).rejects.toBeInstanceOf(
+      TimeoutError,
+    );
     await vi.advanceTimersByTimeAsync(20);
     await overridden;
   });

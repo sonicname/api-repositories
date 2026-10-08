@@ -86,7 +86,7 @@ describe('repository middlewares', () => {
       .mergeAll({ route })
       .build();
 
-    await api.route();
+    await api.route.orThrow();
 
     expect(order).toEqual([
       'repo:in',
@@ -110,7 +110,7 @@ describe('repository middlewares', () => {
       .addRoute('hello', createRoute({ method: 'GET', path: '/hello' }))
       .build();
 
-    await api.hello();
+    await api.hello.orThrow();
 
     expect(seen).toEqual(['hello']);
   });
