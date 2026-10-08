@@ -2,6 +2,7 @@ import type { HttpMethod, ResponseType } from './adapters/types.js';
 import type { CacheOptions } from './middleware/cache.js';
 import type { RetryOptions } from './middleware/retry.js';
 import type { Middleware } from './middleware/types.js';
+import type { Result } from './result.js';
 import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 
 /** A schema slot: either a Standard Schema or nothing. */
@@ -347,6 +348,11 @@ export interface RouteCaller<R extends AnyRoute> {
   (...args: RouteArgs<R>): Promise<RouteOutput<R>>;
   /** Perform the request and resolve with status, headers and body. */
   raw(...args: RouteArgs<R>): Promise<RouteResponse<RouteOutput<R>>>;
+  /**
+   * Perform the request and resolve with a Go-style `[error, data]` tuple instead of
+   * rejecting. `error` is a {@link RouteError} or `null`.
+   */
+  safe(...args: RouteArgs<R>): Promise<Result<RouteOutput<R>>>;
   /** The route definition this caller was built from. */
   readonly definition: R;
 }

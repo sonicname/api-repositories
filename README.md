@@ -16,6 +16,9 @@ Declare your backend endpoints once, get a fully typed API client.
   own in a few lines.
 - **Validated at runtime**: bad inputs are rejected before the request is sent, unexpected
   responses throw a `ValidationError`, non-2xx statuses throw an `ApiError`.
+- **Errors you can reason about**: every failure is a tagged `RouteError`. Use `caller.safe()`
+  for a Go-style `[error, data]` tuple, or `matchError` / `catchTag` for typed, exhaustive
+  handling by tag.
 - **Resilient**: per-attempt timeout, retry with exponential backoff and `Retry-After`, and an
   opt-in cache with TTL, request deduplication and tag invalidation. All configurable per
   repository, per route and per call.
@@ -330,24 +333,79 @@ non-2xx statuses; the repository decides what counts as a failure.
 
 ## Errors
 
-```ts
-import { ApiError, TimeoutError, ValidationError } from 'endpoint-kit';
+Every rejection from a route call is a `RouteError`: one of six classes sharing a `_tag`
+discriminant and extending `TaggedError`.
 
+| Class             | `_tag`              | When                                                                       |
+| ----------------- | ------------------- | -------------------------------------------------------------------------- |
+| `ApiError`        | `'ApiError'`        | Non-success status. Has `status`, `data`, `headers`.                       |
+| `ValidationError` | `'ValidationError'` | Params, query, body or response failed its schema. Has `target`, `issues`. |
+| `TimeoutError`    | `'TimeoutError'`    | The per-attempt timeout fired. Has `timeout`.                              |
+| `AbortError`      | `'AbortError'`      | The caller's `signal` aborted. `cause` is the reason.                      |
+| `NetworkError`    | `'NetworkError'`    | The transport could not reach the server. `cause` is the raw error.        |
+| `UnknownError`    | `'UnknownError'`    | Anything else thrown (a middleware bug...). `cause` is the raw value.      |
+
+Every error also carries `route`, the name of the route that was called. Errors thrown by your
+own middlewares that extend `TaggedError` pass through untouched, so you can add tags of your own.
+
+### Go style: `caller.safe()`
+
+`safe()` never rejects. It resolves with an `[error, data]` tuple where exactly one side is
+`null`, so a truthiness check on `error` narrows `data`.
+
+```ts
+const [error, user] = await github.getUser.safe({ params: { username: 'octocat' } });
+if (error) {
+  // error: RouteError, user: null
+  return showToast(error.message);
+}
+user.login; // user: { id: number; login: string }
+```
+
+`toResult(promise, routeName?)` does the same for any promise, and `ok()` / `err()` build
+results by hand.
+
+### Tag based: `matchError`, `catchTag`, `catchTags`
+
+`matchError` dispatches on `_tag` with one typed handler per tag. Provide every tag or a `_`
+fallback; forgetting one is a compile error. It returns whatever the chosen handler returns.
+
+```ts
+import { matchError } from 'endpoint-kit';
+
+const message = matchError(error, {
+  ApiError: (e) => (e.status === 404 ? 'Not found' : `Server said ${e.status}`),
+  ValidationError: (e) => e.issues.map((issue) => issue.message).join(', '),
+  TimeoutError: () => 'Still loading, hang on',
+  _: (e) => e.message,
+});
+```
+
+`catchTag` and `catchTags` recover from specific tags on a promise and rethrow the rest.
+
+```ts
+import { catchTag, catchTags } from 'endpoint-kit';
+
+const user = await catchTag(github.getUser({ params: { username } }), 'ApiError', (e) =>
+  e.status === 404 ? null : Promise.reject(e),
+);
+
+const repos = await catchTags(github.listRepos({ params: { username } }), {
+  TimeoutError: () => cachedRepos,
+  NetworkError: () => [],
+});
+```
+
+`hasTag(error, 'ApiError')` is the plain type guard, and `toRouteError(unknown, route)` is the
+normaliser the library applies to everything it throws.
+
+### try/catch still works
+
+```ts
 try {
   await github.getUser({ params: { username: 'nobody' } });
 } catch (error) {
-  if (error instanceof ApiError) {
-    error.status; // 404
-    error.data; // parsed body
-    error.route; // 'getUser'
-  }
-  if (error instanceof ValidationError) {
-    error.target; // 'params' | 'query' | 'body' | 'response'
-    error.issues; // Standard Schema issues
-  }
-  if (error instanceof TimeoutError) {
-    error.timeout; // ms
-  }
+  if (error instanceof ApiError) error.status; // 404
 }
 ```
 

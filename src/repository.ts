@@ -1,7 +1,7 @@
 import { fetchAdapter } from './adapters/fetch.js';
 import type { Adapter, AdapterRequest, AdapterResponse } from './adapters/types.js';
-import { ApiError, ValidationError } from './errors.js';
-import type { ValidationTarget } from './errors.js';
+import { ApiError, toRouteError, ValidationError } from './errors.js';
+import type { RouteError, ValidationTarget } from './errors.js';
 import { cacheMiddleware, createCacheController } from './middleware/cache.js';
 import type { CacheController, CacheOptions, CacheStorage } from './middleware/cache.js';
 import { retryMiddleware } from './middleware/retry.js';
@@ -20,6 +20,8 @@ import type {
   RouteResponse,
   Simplify,
 } from './route.js';
+import type { Result } from './result.js';
+import { toResult } from './result.js';
 import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 import { buildUrl } from './url.js';
 
@@ -46,7 +48,7 @@ export interface RepositoryHooks {
   onError?: (context: {
     route: string;
     request: AdapterRequest | undefined;
-    error: unknown;
+    error: RouteError;
   }) => void | Promise<void>;
 }
 
@@ -191,7 +193,10 @@ function createCaller<R extends AnyRoute>(
   const caller = (...args: RouteArgs<R>): Promise<RouteOutput<R>> =>
     raw(...args).then((response) => response.data);
 
-  return Object.assign(caller, { raw, definition: route });
+  const safe = (...args: RouteArgs<R>): Promise<Result<RouteOutput<R>>> =>
+    toResult(caller(...args), name);
+
+  return Object.assign(caller, { raw, safe, definition: route });
 }
 
 interface LooseInput {
@@ -259,7 +264,8 @@ async function execute(
       statusText: response.statusText,
       headers: response.headers,
     };
-  } catch (error) {
+  } catch (raw) {
+    const error = toRouteError(raw, name);
     await hooks.onError?.({ route: name, request, error });
     throw error;
   }

@@ -37,8 +37,21 @@ export type {
   RepositoryHooks,
 } from './repository.js';
 
-export { ApiError, TimeoutError, ValidationError } from './errors.js';
-export type { ValidationTarget } from './errors.js';
+export {
+  AbortError,
+  ApiError,
+  NetworkError,
+  TaggedError,
+  TimeoutError,
+  UnknownError,
+  ValidationError,
+  hasTag,
+  isTaggedError,
+  toRouteError,
+} from './errors.js';
+export type { ErrorByTag, RouteError, RouteErrorTag, ValidationTarget } from './errors.js';
+export { catchTag, catchTags, err, matchError, ok, toResult } from './result.js';
+export type { ErrorHandlers, HandlerResult, Result, RouteErrorHandlers } from './result.js';
 
 export { fetchAdapter } from './adapters/fetch.js';
 export type { FetchAdapterOptions } from './adapters/fetch.js';
