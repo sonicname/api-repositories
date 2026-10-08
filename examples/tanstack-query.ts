@@ -18,10 +18,18 @@ import type {
   RouteOutput,
 } from '../src/index.js';
 
-/** Make every `useQuery` / `useMutation` error default to `RouteError` unless narrowed further. */
+import type { NotFoundError, RateLimitedError, UnauthorizedError } from './api.js';
+
+/** Every error the app's routes can produce: the built-ins plus the custom ones. */
+export type AppError = RouteError | NotFoundError | UnauthorizedError | RateLimitedError;
+
+/**
+ * Make `useQuery(...).error` and `useMutation(...).error` default to `AppError` everywhere,
+ * so `error._tag === 'NotFoundError'` narrows without any helper.
+ */
 declare module '@tanstack/react-query' {
   interface Register {
-    defaultError: RouteError;
+    defaultError: AppError;
   }
 }
 
@@ -68,11 +76,4 @@ export function routeQuery<R extends AnyRoute, E>(
       return caller.orThrow(...([withSignal] as RouteArgs<R>));
     },
   });
-}
-
-/** `mutationFn` for a route: throws the typed error so `useMutation` sees it. */
-export function routeMutation<R extends AnyRoute, E>(
-  caller: RouteCaller<R, E>,
-): (input: RouteInput<R>) => Promise<RouteOutput<R>> {
-  return (input) => caller.orThrow(...([input] as RouteArgs<R>));
 }

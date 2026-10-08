@@ -1,5 +1,9 @@
 /**
- * React components built on TanStack Query + the helpers in `tanstack-query.ts`.
+ * React components on TanStack Query.
+ *
+ * `UserCard` and `NewIssueButton` use TanStack directly: `orThrow()` inside `queryFn` /
+ * `mutationFn` and nothing else. `RepoList` shows the optional `routeQuery` helper from
+ * `tanstack-query.ts`, which derives the key and types the error per route.
  */
 import {
   QueryClient,
@@ -15,7 +19,7 @@ import type { ReactElement } from 'react';
 import { matchError } from '../src/index.js';
 
 import { github } from './api.js';
-import { routeKeyPrefix, routeMutation, routeQuery } from './tanstack-query.js';
+import { routeKeyPrefix, routeQuery } from './tanstack-query.js';
 
 // --- Query client ----------------------------------------------------------
 
@@ -29,21 +33,23 @@ export const queryClient = new QueryClient({
   },
 });
 
-// --- Queries ---------------------------------------------------------------
+// --- Plain usage -----------------------------------------------------------
 
 export function UserCard({ username }: { username: string }): ReactElement {
-  const { data, error, isPending } = useQuery(routeQuery(github.getUser, { params: { username } }));
+  const { data, error, isPending } = useQuery({
+    queryKey: ['user', username],
+    queryFn: ({ signal }) => github.getUser.orThrow({ params: { username }, signal }),
+  });
 
   if (isPending) return <p>Loading…</p>;
 
   if (error) {
-    // `error` is RouteError | NotFoundError | UnauthorizedError | RateLimitedError
+    // error: AppError (see tanstack-query.ts), narrow on _tag or use matchError
     return (
       <p role="alert">
         {matchError(error, {
           NotFoundError: () => `No user named ${username}`,
           UnauthorizedError: () => 'Please sign in to see profiles',
-          RateLimitedError: (e) => `Rate limited until ${e.resetAt.toLocaleTimeString()}`,
           ApiError: (e) => `GitHub answered ${String(e.status)}`,
           _: (e) => e.message,
         })}
@@ -51,15 +57,35 @@ export function UserCard({ username }: { username: string }): ReactElement {
     );
   }
 
+  return <h2>{data.name ?? data.login}</h2>;
+}
+
+export function NewIssueButton({ owner, repo }: { owner: string; repo: string }): ReactElement {
+  const client = useQueryClient();
+  const createIssue = useMutation({
+    mutationFn: (title: string) =>
+      github.createIssue.orThrow({ params: { owner, repo }, body: { title } }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['repos', owner] }),
+  });
+
   return (
-    <h2>
-      {data.name ?? data.login} (#{data.id})
-    </h2>
+    <button
+      disabled={createIssue.isPending}
+      onClick={() => {
+        createIssue.mutate('Found a bug');
+      }}
+    >
+      {createIssue.isPending ? 'Creating…' : 'New issue'}
+      {createIssue.error && <span> ({createIssue.error.message})</span>}
+    </button>
   );
 }
 
+// --- Optional helper -------------------------------------------------------
+
 export function RepoList({ username }: { username: string }): ReactElement {
-  // Suspense variant: `data` is never undefined, errors go to the nearest error boundary.
+  // routeQuery builds the key from the route and input, forwards the signal, and types
+  // the error as exactly this route's union. Suspense variant: data is never undefined.
   const { data } = useSuspenseQuery(
     routeQuery(github.listRepos, {
       params: { username },
@@ -78,24 +104,13 @@ export function RepoList({ username }: { username: string }): ReactElement {
   );
 }
 
-// --- Mutations -------------------------------------------------------------
-
-export function NewIssueButton({ owner, repo }: { owner: string; repo: string }): ReactElement {
+export function RefreshReposButton(): ReactElement {
   const client = useQueryClient();
-  const createIssue = useMutation({
-    mutationFn: routeMutation(github.createIssue),
-    onSuccess: () => client.invalidateQueries({ queryKey: routeKeyPrefix(github.listRepos) }),
-  });
-
   return (
     <button
-      disabled={createIssue.isPending}
-      onClick={() => {
-        createIssue.mutate({ params: { owner, repo }, body: { title: 'Found a bug' } });
-      }}
+      onClick={() => void client.invalidateQueries({ queryKey: routeKeyPrefix(github.listRepos) })}
     >
-      {createIssue.isPending ? 'Creating…' : 'New issue'}
-      {createIssue.error && <span> ({createIssue.error.message})</span>}
+      Refresh
     </button>
   );
 }
@@ -110,6 +125,7 @@ export function App(): ReactElement {
         <RepoList username="octocat" />
       </Suspense>
       <NewIssueButton owner="octocat" repo="hello-world" />
+      <RefreshReposButton />
     </QueryClientProvider>
   );
 }
