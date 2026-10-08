@@ -4,11 +4,86 @@ import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 /** A schema slot: either a Standard Schema or nothing. */
 export type SchemaOrUndefined = AnySchema | undefined;
 
+// ---------------------------------------------------------------------------
+// Path params
+// ---------------------------------------------------------------------------
+
+/** Names of `:param` segments in a path literal. */
+export type PathParamNames<TPath extends string> =
+  TPath extends `${string}:${infer Param}/${infer Rest}`
+    ? Param | PathParamNames<`/${Rest}`>
+    : TPath extends `${string}:${infer Param}`
+      ? Param
+      : never;
+
+/** Object type for the `:param` segments of a path, or `never` if it has none. */
+export type PathParams<TPath extends string> = [PathParamNames<TPath>] extends [never]
+  ? never
+  : { [K in PathParamNames<TPath>]: string | number };
+
+/**
+ * One schema per path param. Keys are restricted to the `:param` names of the path,
+ * so the IDE suggests them. A param without a schema accepts `string | number`.
+ */
+export type ParamsSchemaMap<TPath extends string> = {
+  [K in PathParamNames<TPath>]?: AnySchema;
+};
+
+/** Everything the `params` field of a route accepts. */
+export type ParamsSpec<TPath extends string> = AnySchema | ParamsSchemaMap<TPath> | undefined;
+
+type MissingParamsError<TPath extends string, Missing extends PropertyKey> = {
+  [
+    K in `params: path "${TPath}" has param ":${Missing & string}" but the schema does not require it`
+  ]: never;
+};
+
+type ExtraParamsError<TPath extends string, Extra extends PropertyKey> = {
+  [K in `params: "${Extra & string}" is not a param of path "${TPath}"`]: never;
+};
+
+/**
+ * Compile-time check that `params` matches the `:param` segments of `TPath`.
+ *
+ * - A whole-object schema must *require* every path param and declare nothing else.
+ * - A per-key map may omit params but cannot name keys that are not in the path.
+ *
+ * Resolves to `TParams` when valid, or to an object type whose property name spells out
+ * the problem, so the assignment error in the IDE is readable.
+ */
+export type ValidateParams<TPath extends string, TParams> = [TParams] extends [undefined]
+  ? TParams
+  : TParams extends AnySchema
+    ? CheckParamKeys<
+        TPath,
+        RequiredKeys<StandardSchemaV1.InferInput<TParams>>,
+        keyof StandardSchemaV1.InferInput<TParams>,
+        TParams
+      >
+    : TParams extends object
+      ? CheckParamKeys<TPath, PathParamNames<TPath>, keyof TParams, TParams>
+      : never;
+
+type CheckParamKeys<
+  TPath extends string,
+  Required extends PropertyKey,
+  All extends PropertyKey,
+  TParams,
+> = [Exclude<PathParamNames<TPath>, Required>] extends [never]
+  ? [Exclude<All, PathParamNames<TPath>>] extends [never]
+    ? TParams
+    : ExtraParamsError<TPath, Exclude<All, PathParamNames<TPath>>>
+  : MissingParamsError<TPath, Exclude<PathParamNames<TPath>, Required>>;
+
+// ---------------------------------------------------------------------------
+// Route definition
+// ---------------------------------------------------------------------------
+
 /**
  * Declaration of a single API endpoint.
  *
  * @typeParam TPath - Literal path, e.g. `"/users/:username"`. Path params are inferred from it.
- * @typeParam TParams - Schema for path params. When omitted they are inferred from `TPath`.
+ * @typeParam TParams - Path params: a whole-object schema, a per-key schema map, or nothing.
  * @typeParam TQuery - Schema for the query string.
  * @typeParam TBody - Schema for the request body.
  * @typeParam TResponse - Schema for the response body. Its output type is what the caller receives.
@@ -16,7 +91,7 @@ export type SchemaOrUndefined = AnySchema | undefined;
  */
 export interface RouteDefinition<
   TPath extends string = string,
-  TParams extends SchemaOrUndefined = SchemaOrUndefined,
+  TParams extends ParamsSpec<TPath> = ParamsSpec<TPath>,
   TQuery extends SchemaOrUndefined = SchemaOrUndefined,
   TBody extends SchemaOrUndefined = SchemaOrUndefined,
   TResponse extends SchemaOrUndefined = SchemaOrUndefined,
@@ -25,7 +100,11 @@ export interface RouteDefinition<
   method: HttpMethod;
   /** Path relative to the repository `baseUrl`. Use `:name` segments for path params. */
   path: TPath;
-  /** Schema validating path params. Optional, inferred from `path` when omitted. */
+  /**
+   * Validation for path params. Either one schema per param
+   * (`{ id: z.coerce.number() }`) or a whole-object schema. Params without a schema
+   * accept `string | number`.
+   */
   params?: TParams;
   /** Schema validating the query string. */
   query?: TQuery;
@@ -50,25 +129,29 @@ export type RouteMap = Record<string, AnyRoute>;
 /**
  * Declare an endpoint. The returned object is the same you pass in, but with all
  * literal types preserved so the repository can infer inputs and outputs.
+ * `params` is checked against the `:param` segments of `path` at compile time.
  *
  * @example
  * ```ts
- * const getUser = createRoute({
+ * const getIssue = createRoute({
  *   method: 'GET',
- *   path: '/users/:username',
- *   response: z.object({ id: z.number(), login: z.string() }),
+ *   path: '/repos/:owner/:repo/issues/:number',
+ *   params: { number: z.coerce.number().int() }, // owner and repo accept string | number
+ *   response: z.object({ id: z.number(), title: z.string() }),
  * });
  * ```
  */
 export function createRoute<
   TPath extends string,
-  TParams extends SchemaOrUndefined = undefined,
+  TParams extends ParamsSpec<TPath> = undefined,
   TQuery extends SchemaOrUndefined = undefined,
   TBody extends SchemaOrUndefined = undefined,
   TResponse extends SchemaOrUndefined = undefined,
   TResponseType extends ResponseType = 'json',
 >(
-  definition: RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType>,
+  definition: RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType> & {
+    params?: NoInfer<ValidateParams<TPath, TParams>>;
+  },
 ): RouteDefinition<TPath, TParams, TQuery, TBody, TResponse, TResponseType> {
   return definition;
 }
@@ -79,19 +162,6 @@ export function createRoute<
 
 /** Flattens intersections so hover tooltips are readable. */
 export type Simplify<T> = { [K in keyof T]: T[K] } & {};
-
-/** Names of `:param` segments in a path literal. */
-export type PathParamNames<TPath extends string> =
-  TPath extends `${string}:${infer Param}/${infer Rest}`
-    ? Param | PathParamNames<`/${Rest}`>
-    : TPath extends `${string}:${infer Param}`
-      ? Param
-      : never;
-
-/** Object type for the `:param` segments of a path, or `never` if it has none. */
-export type PathParams<TPath extends string> = [PathParamNames<TPath>] extends [never]
-  ? never
-  : { [K in PathParamNames<TPath>]: string | number };
 
 type SchemaOf<S> = [NonNullable<S>] extends [never]
   ? undefined
@@ -122,8 +192,23 @@ type Field<K extends string, T> = [T] extends [never]
       : { [P in K]: T }
     : { [P in K]: T };
 
-/** Path params accepted by a route: schema input, or inferred from the path. */
-export type RouteParams<R extends AnyRoute> = InputOf<R['params'], PathParams<R['path']>>;
+/** Input type of a per-key params map: schema input where given, `string | number` elsewhere. */
+type MappedParams<TPath extends string, TMap> = [PathParamNames<TPath>] extends [never]
+  ? never
+  : {
+      [K in PathParamNames<TPath>]: K extends keyof TMap
+        ? NonNullable<TMap[K]> extends AnySchema
+          ? StandardSchemaV1.InferInput<NonNullable<TMap[K]>>
+          : string | number
+        : string | number;
+    };
+
+/** Path params accepted by a route: schema input, per-key map input, or inferred from the path. */
+export type RouteParams<R extends AnyRoute> = [NonNullable<R['params']>] extends [never]
+  ? PathParams<R['path']>
+  : NonNullable<R['params']> extends AnySchema
+    ? StandardSchemaV1.InferInput<NonNullable<R['params']>>
+    : MappedParams<R['path'], NonNullable<R['params']>>;
 
 /** Query accepted by a route, or `never` when it has no query schema. */
 export type RouteQuery<R extends AnyRoute> = InputOf<R['query']>;

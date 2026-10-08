@@ -5,13 +5,14 @@ import type { ValidationTarget } from './errors.js';
 import type {
   AnyRoute,
   RouteArgs,
+  ParamsSpec,
   RouteCaller,
   RouteMap,
   RouteOutput,
   RouteResponse,
   Simplify,
 } from './route.js';
-import type { AnySchema } from './standard-schema.js';
+import type { AnySchema, StandardSchemaV1 } from './standard-schema.js';
 import { buildUrl } from './url.js';
 
 /** Headers shared by every request: a static map or a (possibly async) factory, handy for auth tokens. */
@@ -168,8 +169,7 @@ async function execute(
   let request: AdapterRequest | undefined;
 
   try {
-    const params = (await validate(name, 'params', route.params, input.params)) as
-      Record<string, unknown> | undefined;
+    const params = await validateParams(name, route.params, input.params);
     const query = await validate(name, 'query', route.query, input.query);
     const body = await validate(name, 'body', route.body, input.body);
 
@@ -237,4 +237,41 @@ async function validate(
     throw new ValidationError(target, result.issues, routeName);
   }
   return result.value;
+}
+
+function isSchema(value: unknown): value is AnySchema {
+  return typeof value === 'object' && value !== null && '~standard' in value;
+}
+
+/**
+ * Validate path params against either a whole-object schema or a per-key map.
+ * Params without a schema pass through untouched.
+ */
+async function validateParams(
+  routeName: string,
+  spec: ParamsSpec<string>,
+  value: Record<string, unknown> | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (spec === undefined) return value;
+  if (isSchema(spec)) {
+    return (await validate(routeName, 'params', spec, value)) as
+      Record<string, unknown> | undefined;
+  }
+
+  const result: Record<string, unknown> = { ...value };
+  const map = spec as Record<string, unknown>;
+  for (const key of Object.keys(map)) {
+    const schema = map[key];
+    if (!isSchema(schema)) continue;
+    const outcome = await schema['~standard'].validate(value?.[key]);
+    if (outcome.issues) {
+      const issues: StandardSchemaV1.Issue[] = outcome.issues.map((issue) => ({
+        message: issue.message,
+        path: [key, ...(issue.path ?? [])],
+      }));
+      throw new ValidationError('params', issues, routeName);
+    }
+    result[key] = outcome.value;
+  }
+  return result;
 }

@@ -49,7 +49,7 @@ const listRepos = createRoute({
 const createIssue = createRoute({
   method: 'POST',
   path: '/repos/:owner/:repo/issues',
-  params: z.object({ owner: z.string().min(1), repo: z.string().min(1) }),
+  params: { owner: z.string().min(1) }, // repo stays string | number
   body: z.object({ title: z.string().min(1), labels: z.array(z.string()).default([]) }),
   response: z.object({ number: z.number(), html_url: z.string() }),
 });
@@ -80,19 +80,45 @@ const issue = await github.createIssue({
 
 `createRoute` accepts:
 
-| Field          | Description                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------- |
-| `method`       | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` or `OPTIONS`.                                |
-| `path`         | Path relative to `baseUrl`. `:name` segments become path params.                             |
-| `params`       | Schema for path params. Optional. Without it, params are inferred from `path`.               |
-| `query`        | Schema for the query string. Arrays become repeated keys, `undefined` values are skipped.    |
-| `body`         | Schema for the request body. Plain objects are JSON encoded, `FormData`/`Blob` pass through. |
-| `response`     | Schema for the response body. Its output type is what the caller resolves with.              |
-| `responseType` | `json` (default), `text`, `blob`, `arrayBuffer` or `none`.                                   |
-| `headers`      | Static headers for this route.                                                               |
-| `options`      | Adapter specific options (axios config, ofetch options, `RequestInit`).                      |
+| Field          | Description                                                                                                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `method`       | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` or `OPTIONS`.                                                                                                                                                             |
+| `path`         | Path relative to `baseUrl`. `:name` segments become path params.                                                                                                                                                          |
+| `params`       | Path param validation: a per-key map `{ id: z.coerce.number() }` (keys are autocompleted from `path`) or a whole-object schema. Both are checked against the path at compile time. Params without a schema accept `string | number`. |
+| `query`        | Schema for the query string. Arrays become repeated keys, `undefined` values are skipped.                                                                                                                                 |
+| `body`         | Schema for the request body. Plain objects are JSON encoded, `FormData`/`Blob` pass through.                                                                                                                              |
+| `response`     | Schema for the response body. Its output type is what the caller resolves with.                                                                                                                                           |
+| `responseType` | `json` (default), `text`, `blob`, `arrayBuffer` or `none`.                                                                                                                                                                |
+| `headers`      | Static headers for this route.                                                                                                                                                                                            |
+| `options`      | Adapter specific options (axios config, ofetch options, `RequestInit`).                                                                                                                                                   |
 
 A route can be reused across several repositories.
+
+### Path params
+
+Params are inferred from the `:name` segments of `path`. Add schemas only where you need them:
+
+```ts
+const getIssue = createRoute({
+  method: 'GET',
+  path: '/repos/:owner/:repo/issues/:number',
+  params: {
+    number: z.coerce.number().int().positive(), // keys are suggested by the IDE
+  },
+});
+
+await api.getIssue({ params: { owner: 'octocat', repo: 'hello-world', number: '42' } });
+```
+
+A whole-object schema works too and must require exactly the path params:
+
+```ts
+params: z.object({ owner: z.string(), repo: z.string() });
+```
+
+Mismatches are compile errors with a readable message, for example
+`params: "repo" is not a param of path "/users/:username"` or
+`params: path "/repos/:owner/:repo" has param ":repo" but the schema does not require it`.
 
 ## Calling a route
 
