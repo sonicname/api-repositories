@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // TanStack Query's option types do not play well with this flag; most apps leave it off.
+    "exactOptionalPropertyTypes": false,
+    "rootDir": "..",
+    "types": ["node"]
+  },
+  "include": ["./**/*", "../src/**/*"],
+  // Override the root exclude, which lists this folder.
+  "exclude": ["../node_modules", "../dist"]
+}

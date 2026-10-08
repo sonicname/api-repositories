@@ -452,6 +452,19 @@ type GetUserOutput = RouteOutput<typeof getUser>;
 type GetUserError = RouteFailure<typeof getUser>;
 ```
 
+## Guides
+
+Longer, type-checked walkthroughs live in [`guides/`](./guides/), with the full source of every
+snippet under [`examples/`](./examples/):
+
+- [TanStack Query](./guides/tanstack-query.md): `routeQuery` / `routeMutation` helpers, typed
+  `useQuery` errors, invalidation, Suspense, SSR.
+- [React without a data library](./guides/react.md): a `useRoute` hook with abort on unmount,
+  mutations, server components.
+- [Authentication and refresh tokens](./guides/auth-refresh-token.md): token store, `headers`
+  provider, refresh-on-401 middleware with single-flight refresh.
+- [Testing](./guides/testing.md): scripted adapters, MSW, testing middlewares and timers.
+
 ## Development
 
 | Script               | Description                                                |

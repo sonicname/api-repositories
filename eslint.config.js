@@ -31,6 +31,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ['examples/**/*.{ts,tsx}'],
+    rules: {
+      // Examples mirror app code; React components read better without return annotations.
+      '@typescript-eslint/explicit-module-boundary-types': 'off',
+    },
+  },
+  {
     files: ['tests/**/*.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
